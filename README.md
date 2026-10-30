@@ -1,6 +1,5 @@
 # LM-ContextProbe
 
-> Formerly **CAREBench**. Renamed in October 2026 to avoid confusion with other health-LLM benchmarks of that name ([#19](https://github.com/soroushdty/LM-ContextProbe/issues/19)). Old GitHub links redirect here.
 
 **LM-ContextProbe** is an evaluation framework for testing whether language models change their judgments with patient context the way physicians do. The built-in task is classifying EHR items into sensitive-data categories; the label set is configurable.
 
