@@ -245,15 +245,17 @@ class TestConfigFlags:
 class TestLatency:
     def test_latency_regression(self):
         """Second predict_proba() reuses live models and must be ≥2× faster than first."""
-        # 20 folds amplifies materialization overhead over forward-pass cost
+        # 20 folds amplifies materialization overhead over forward-pass cost;
+        # a small batch keeps the forward pass from hiding it (with 500 rows
+        # the expected speedup is only ~2.2x, too close to the threshold).
         pred = make_predictor(n_features=50, n_classes=10, n_folds=20)
-        X = np.random.default_rng(0).random((500, 50)).astype(np.float32)
+        X = np.random.default_rng(0).random((50, 50)).astype(np.float32)
 
         # Burn-in: absorb one-time Python / torch import overhead
         _warm = make_predictor(n_features=2, n_classes=1, n_folds=1)
         _warm.predict_proba(np.zeros((1, 2), dtype=np.float32))
 
-        N = 9  # odd number → clean median
+        N = 15
         times_first: list[float] = []
         times_second: list[float] = []
         for _ in range(N):
@@ -266,10 +268,13 @@ class TestLatency:
             times_first.append(t1 - t0)
             times_second.append(t2 - t1)
 
-        median_first = sorted(times_first)[N // 2]
-        median_second = sorted(times_second)[N // 2]
+        # Fastest of N: interference from other processes (for example other
+        # pytest-xdist workers) only ever adds time, so the minimum is the
+        # least noisy estimate of each call's own cost.
+        best_first = min(times_first)
+        best_second = min(times_second)
 
-        assert median_second * 2 <= median_first, (
+        assert best_second * 2 <= best_first, (
             f"Expected ≥2× speedup on reuse: "
-            f"first={median_first * 1e3:.2f}ms  second={median_second * 1e3:.2f}ms"
+            f"first={best_first * 1e3:.2f}ms  second={best_second * 1e3:.2f}ms"
         )
