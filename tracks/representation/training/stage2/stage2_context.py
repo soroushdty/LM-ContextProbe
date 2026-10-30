@@ -81,6 +81,40 @@ def build_context_vectors(
     return result
 
 
+def draw_shuffled_context_donors(
+    patient_ids: np.ndarray,
+    donor_pool: list[int],
+    seed: int,
+) -> np.ndarray:
+    """Pick another patient's context for every row (the shuffled-context control).
+
+    Each row's donor is drawn uniformly from ``donor_pool`` without the row's
+    own patient, as Track 3 does for its shuffled-context prompts, so no row
+    is scored with its own patient's context.
+
+    Args:
+        patient_ids: (n,) patient ID of each row.
+        donor_pool:  Patients whose context can be lent, normally those with a
+                     context vector.
+        seed:        Seed for the draws (``shuffled_context_seed``).
+
+    Returns:
+        (n,) int array of donor patient IDs.
+    """
+    rng = np.random.default_rng(seed)
+    pool = np.array(sorted({int(float(p)) for p in donor_pool}), dtype=int)
+    donors = np.empty(len(patient_ids), dtype=int)
+    for idx, pid in enumerate(patient_ids):
+        candidates = pool[pool != int(float(pid))]
+        if candidates.size == 0:
+            raise ValueError(
+                f"Cannot draw a shuffled context for patient {int(float(pid))}: "
+                "no other patient has a context vector."
+            )
+        donors[idx] = candidates[int(rng.integers(0, candidates.size))]
+    return donors
+
+
 def _build_2d_fusion(e_i: np.ndarray, c_p: np.ndarray) -> np.ndarray:
     return np.concatenate([e_i, c_p])
 

@@ -535,7 +535,7 @@ class TestStatisticsInputAlignment:
 
         check_keys = [
             "test_probs_cf", "test_probs_cf_fold_pure",
-            "test_probs_ca", "test_probs_ca_fold_pure",
+            "test_probs_ca", "test_probs_ca_fold_pure", "test_probs_shuffled_fold_pure",
         ]
         for key in check_keys:
             arr = result.get(key)

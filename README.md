@@ -5,7 +5,7 @@
 
 The framework has three parts:
 
-- **A study design.** Human reference observers label each item twice: first **without** patient context, then **with** the patient's clinical snapshot. Track 3 adds a shuffled (wrong-patient) context as a control.
+- **A study design.** Human reference observers label each item twice: first **without** patient context, then **with** the patient's clinical snapshot. Both tracks add a shuffled (wrong-patient) context as a control.
 - **Endpoints with statistical tests.** How much a model's judgments move when context is added, whether they move the same way the human judgments did, and whether that depends on the context belonging to the right patient. Inference is clustered by patient ([`docs/methodology.md`](docs/methodology.md)).
 - **Pipelines that run the design** on any model you configure and any dataset in the paired-context format, or in another format through an adapter.
 
@@ -45,7 +45,7 @@ Dependencies point one way: `tracks/` and `adapters/` import from `shared/`; `sh
 | 2 – Adaptation | Learning from supervised case experience (clinical training, feedback on real cases) | Can the shift be learned from labelled cases and carried over to new patients? | Planned ([#13](https://github.com/soroushdty/LM-ContextProbe/issues/13)) |
 | 3 – Reasoning | Deliberating over the chart at decision time, without changing what the model knows | Does the shift come from reasoning at decision time? | Available |
 
-- **[Track 1 — Representation](tracks/representation/README.md)** (`tracks/representation/`): embedding pipeline (default model Bio_ClinicalBERT; decoder LLMs also work, see [`shared/embeddings/`](shared/embeddings/README.md)), multilabel classifier, context-aware fusion head, patient-grouped cross-validation (leave-one-patient-out or grouped k-fold), and statistical analysis of the `directional_alignment` and `brier_improvement` endpoints.
+- **[Track 1 — Representation](tracks/representation/README.md)** (`tracks/representation/`): embedding pipeline (default model Bio_ClinicalBERT; decoder LLMs also work, see [`shared/embeddings/`](shared/embeddings/README.md)), multilabel classifier, context-aware fusion head, patient-grouped cross-validation (leave-one-patient-out or grouped k-fold), and statistical analysis of the `directional_alignment`, `brier_improvement` and `context_specificity` endpoints. Each test item is also scored with another patient's context vector (shuffled-context control).
 - **[Track 3 — Reasoning](tracks/reasoning/README.md)** (`tracks/reasoning/`): LLM prompting pipeline. Runs each EHR item under three conditions (context-free, correct-context, shuffled-context) and computes the four Track 3 endpoints against physician judgment shifts.
 
 ### Shared Layer
@@ -65,7 +65,7 @@ The endpoints have the same names in every track (`shared/endpoints.py`; statist
 - **`context_sensitivity`**: Does the correct patient's context move the model's scores more than another patient's (shuffled) context does? Compares mean absolute deltas (context minus context-free) under the two contexts. *(Track 3; formerly H1)*
 - **`directional_alignment`**: Do the model's context-induced deltas agree in sign with the physicians' judgment deltas? *(Track 3, formerly H2; Track 1, formerly H1)*
 - **`class_correspondence`**: Do class-level mean model deltas correlate with class-level mean physician deltas across the categories? *(Track 3; formerly H3)*
-- **`context_specificity`**: Does the correct patient's context produce stronger alignment with the physician deltas than a shuffled (wrong-patient) context? *(Track 3; formerly H4)*
+- **`context_specificity`**: Does the correct patient's context produce stronger alignment with the physician deltas than a shuffled (wrong-patient) context? *(Track 3, formerly H4; Track 1)*
 - **`brier_improvement`**: Does context lower the Brier score against the correct-context reference labels? *(Track 1; formerly H2)*
 
 The default label space is the ten sensitive-data categories used in the SHARES project: behavioral_health, diagnoses, disabilities, infectious_diseases, genetics, medications, sexual_reproductive_health, social_determinants_of_health, violence, other. Other taxonomies are set in config (`classes` and `class_definitions`; see [`docs/adapters.md`](docs/adapters.md#label-space-sharedlabel_spacepy)).
@@ -236,7 +236,6 @@ Planned work is tracked in [GitHub issues](https://github.com/soroushdty/LM-Cont
 - **TRIPOD-LLM report**: an auto-filled TRIPOD-LLM checklist per run, with links to the supporting artifacts and explicit TODOs for author-only items.
 - **Multi-agent reference emulation**: blind LLM rater pairs with consensus and adjudication, mirroring the paired-physician reference design (aligned with the EviTrace multi-agent roadmap).
 - **Track 2 — Adaptation** ([#13](https://github.com/soroushdty/LM-ContextProbe/issues/13)): the analogue of a physician learning from supervised case experience. A model is fine-tuned on labelled (patient context, item) cases from training patients, then evaluated on new patients under the same three conditions as Track 3. A learning curve shows how alignment with physicians grows with the number of patients learned from.
-- **Shuffled-context condition for Track 1** ([#11](https://github.com/soroushdty/LM-ContextProbe/issues/11)): a wrong-patient context control, so Track 1 can test whether the model uses *this* patient's context, as Track 3's `context_specificity` does.
 - **Same-model comparison across tracks** ([#12](https://github.com/soroushdty/LM-ContextProbe/issues/12)): one model family run frozen, fine-tuned, and prompted, so differences between tracks reflect the mechanism rather than the model.
 - **Distribution-shift evaluation**: requires a second dataset in the paired-context format.
 - **Other inputs and backends**: FHIR/OMOP ingestion, confidence-weighted or adjudicated reference aggregation, and hosted-API LLM backends.

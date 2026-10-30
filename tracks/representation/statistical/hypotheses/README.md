@@ -2,7 +2,7 @@
 
 Canonical location for Track 1's endpoint tests.
 
-This package implements Track 1's two pre-specified confirmatory endpoints (see `shared/endpoints.py` and `docs/methodology.md`): `directional_alignment` in `h1.py` and `brier_improvement` in `h2.py`. The module and function names keep Track 1's former hypothesis numbers, H1 and H2. Track 1's `directional_alignment` answers the same question as Track 3's (formerly Track 3's H2). All functions
+This package implements Track 1's three pre-specified confirmatory endpoints (see `shared/endpoints.py` and `docs/methodology.md`): `directional_alignment` in `h1.py`, `brier_improvement` in `h2.py` and `context_specificity` in `context_specificity.py`. The first two modules and their functions keep Track 1's former hypothesis numbers, H1 and H2; `context_specificity` was added later and has no number. Track 1's `directional_alignment` answers the same question as Track 3's (formerly Track 3's H2). All functions
 operate on pre-computed delta and prediction arrays; they do not load data themselves.
 
 ---
@@ -295,9 +295,47 @@ patient-level bootstrap CI. The `n_classes_significant` count is derived directl
 
 ---
 
+## Context specificity (`context_specificity.py`)
+
+**Research question:** Does the model move toward the physicians more with the correct patient's context than with
+another patient's?
+
+`Δ_shuffled = ŷ_shuffled − ŷ_cf`, where `ŷ_shuffled` is the fold-pure Stage 2 prediction with a donor patient's
+context vector (see the shuffled-context condition in `docs/methodology.md`). On cells with `Δ_p ≠ 0` the statistic is
+the mean of `sign(Δ_p)·(Δ_m − Δ_shuffled)`. Both functions call
+`shared.evaluation.hypothesis_analyzer.context_specificity_test`, the function Track 3 uses, so the two tracks report
+the same quantity. Rows with NaN in any delta are left out.
+
+### `context_specificity_pooled`
+
+```python
+context_specificity_pooled(
+    delta_p, delta_m, delta_shuffled,   # (n, n_classes)
+    patient_ids,                        # (n,)
+    eligible_classes, class_list,
+    n_resamples=1000, n_permutations=10_000,
+    rng=None,
+) -> dict
+```
+
+Pooled over confirmatory-eligible classes; the confirmatory result. Keys: `classes`, `n_rows`, `n_cells`,
+`n_patients`, `mean_alignment_correct`, `mean_alignment_shuffled`, `mean_alignment_difference`, `ci_lower`,
+`ci_upper` (patient-cluster bootstrap CI of the difference), `p_value` (one-sided patient-cluster sign-flip test).
+
+**Saved to:** `context_specificity_pooled.json`
+
+### `context_specificity_per_class`
+
+Same statistic and test per class, with `bh_adj_p` (BH across eligible classes) and a `confirmatory` flag.
+
+**Saved to:** `context_specificity_per_class.csv`
+
+---
+
 ## Dependencies
 
 - `scipy.stats`: `binomtest`, `wilcoxon`, `wasserstein_distance`, `false_discovery_control`
 - `statsmodels.stats.contingency_tables`: `StratifiedTable` (optional; manual MH fallback)
 - `shared.statistical.bootstrap`: `bootstrap_rate`, `bootstrap_scalar`, `patient_block_bootstrap`
 - `shared.statistical.delta`: `sign_agreement_mask`
+- `shared.evaluation.hypothesis_analyzer`: `context_specificity_test`

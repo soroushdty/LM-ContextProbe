@@ -9,6 +9,9 @@ correspondence (H3) and context specificity (H4, patient-cluster sign-flip
 test). Method names keep the old
 numbers (compute_h1 ... compute_h4).
 
+``context_specificity_test`` is the context specificity computation itself;
+Track 1 calls it too, so both tracks report the same statistic.
+
 Reuses ``shared.statistical.bootstrap.patient_block_bootstrap`` for
 all bootstrap confidence intervals.
 
@@ -190,6 +193,104 @@ def permutation_test_h4(
         n_permutations=n_permutations,
         rng=rng,
     )
+
+
+def context_specificity_test(
+    delta_model: np.ndarray,
+    delta_shuffled: np.ndarray,
+    delta_reference: np.ndarray,
+    patient_ids: np.ndarray,
+    n_bootstrap: int = 1000,
+    n_permutations: int = 10_000,
+    bootstrap_rng: np.random.Generator | None = None,
+    permutation_rng: np.random.Generator | None = None,
+) -> dict[str, Any]:
+    """Context specificity: alignment with correct vs shuffled context.
+
+    On cells with ``delta_reference != 0``, the alignment of a model delta is
+    ``sign(delta_reference) * delta``.  The statistic is the mean over those
+    cells of ``alignment(delta_model) - alignment(delta_shuffled)``.  Both
+    tracks compute the endpoint with this function, so their values can be
+    compared.
+
+    Parameters
+    ----------
+    delta_model:
+        Shape ``(N, D)``: correct-context score minus context-free score.
+    delta_shuffled:
+        Shape ``(N, D)``: shuffled-context score minus context-free score.
+    delta_reference:
+        Shape ``(N, D)``: the reference observers' delta.
+    patient_ids:
+        Shape ``(N,)``: patient of each row, the cluster for the bootstrap
+        and the sign-flip test.
+    n_bootstrap:
+        Patient-cluster bootstrap resamples for the CI.
+    n_permutations:
+        Sign-flip replicates when exact enumeration is too large.
+    bootstrap_rng, permutation_rng:
+        Generators for the bootstrap and the sign-flip test.
+
+    Returns
+    -------
+    dict with keys ``mean_alignment_correct``, ``mean_alignment_shuffled``,
+    ``mean_diff``, ``ci_lower``, ``ci_upper`` (CI of ``mean_diff``),
+    ``p_value`` (one-sided patient-cluster sign-flip test of
+    ``mean_diff > 0``), ``n_cells`` and ``n_patients``.  The statistics are
+    NaN if there are no cells with ``delta_reference != 0``.
+    """
+    delta_model = np.asarray(delta_model, dtype=float)
+    delta_shuffled = np.asarray(delta_shuffled, dtype=float)
+    delta_reference = np.asarray(delta_reference, dtype=float)
+    patient_ids = np.asarray(patient_ids)
+
+    nz = delta_reference != 0.0  # (N, D) bool
+    if not np.any(nz):
+        nan = float("nan")
+        return {
+            "mean_alignment_correct": nan,
+            "mean_alignment_shuffled": nan,
+            "mean_diff": nan,
+            "ci_lower": nan,
+            "ci_upper": nan,
+            "p_value": nan,
+            "n_cells": 0,
+            "n_patients": 0,
+        }
+
+    sign_ref = np.sign(delta_reference)
+    patient_ids_nz = np.broadcast_to(patient_ids[:, None], nz.shape)[nz]  # (M,)
+    align_correct_nz = (sign_ref * delta_model)[nz]  # (M,)
+    align_shuffled_nz = (sign_ref * delta_shuffled)[nz]  # (M,)
+    diff_nz = align_correct_nz - align_shuffled_nz  # (M,)
+
+    def _diff_stat(idx: np.ndarray) -> float:
+        return float(np.mean(diff_nz[idx]))
+
+    ci_lower, ci_upper = patient_cluster_bootstrap(
+        statistic_fn=_diff_stat,
+        data=diff_nz,
+        patient_ids=patient_ids_nz,
+        n_resamples=n_bootstrap,
+        rng=bootstrap_rng,
+    )
+    p_value = permutation_test_h4(
+        align_correct=align_correct_nz,
+        align_shuffled=align_shuffled_nz,
+        patient_ids=patient_ids_nz,
+        n_permutations=n_permutations,
+        rng=permutation_rng,
+    )
+    return {
+        "mean_alignment_correct": float(np.mean(align_correct_nz)),
+        "mean_alignment_shuffled": float(np.mean(align_shuffled_nz)),
+        "mean_diff": float(np.mean(diff_nz)),
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "p_value": p_value,
+        "n_cells": int(diff_nz.size),
+        "n_patients": int(np.unique(patient_ids_nz).size),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -725,66 +826,25 @@ class HypothesisAnalyzer:
         correct_context_scores = np.asarray(correct_context_scores, dtype=float)
         shuffled_context_scores = np.asarray(shuffled_context_scores, dtype=float)
         delta_physician = np.asarray(delta_physician, dtype=float)
-        D = self._validate_inputs(
+        self._validate_inputs(
             context_free_scores, correct_context_scores,
             shuffled_context_scores, delta_physician,
         )
 
-        delta_llm_correct = correct_context_scores - context_free_scores    # (N, D)
-        delta_llm_shuffled = shuffled_context_scores - context_free_scores  # (N, D)
-
-        align_correct_2d = np.sign(delta_physician) * delta_llm_correct    # (N, D)
-        align_shuffled_2d = np.sign(delta_physician) * delta_llm_shuffled  # (N, D)
-
-        nz = delta_physician != 0.0  # (N, D) bool
-
-        if not np.any(nz):
+        if not np.any(delta_physician != 0.0):
             logger.warning("H4: no non-zero Delta_Physician cells found. Returning NaN.")
-            nan = float("nan")
-            return {
-                "mean_diff": nan,
-                "ci_lower": nan,
-                "ci_upper": nan,
-                "p_value": nan,
-            }
 
-        # Flatten to 1-D arrays of non-zero cells
-        patient_ids_2d = np.tile(self._patient_ids[:, None], (1, D))  # (N, D)
-        patient_ids_nz = patient_ids_2d[nz]  # (M,)
-
-        align_correct_nz = align_correct_2d[nz]    # (M,)
-        align_shuffled_nz = align_shuffled_2d[nz]  # (M,)
-        diff_nz = align_correct_nz - align_shuffled_nz  # (M,)
-
-        mean_diff = float(np.mean(diff_nz))
-
-        # --- Bootstrap CI ---
-        rng_boot = np.random.default_rng(self._bootstrap_seed)
-
-        def _diff_stat(idx: np.ndarray) -> float:
-            return float(np.mean(diff_nz[idx]))
-
-        ci_lower, ci_upper = patient_cluster_bootstrap(
-            statistic_fn=_diff_stat,
-            data=diff_nz,
-            patient_ids=patient_ids_nz,
-            n_resamples=self._n_bootstrap,
-            rng=rng_boot,
-        )
-
-        # --- Paired permutation test ---
-        rng_perm = np.random.default_rng(self._permutation_seed)
-        p_value = permutation_test_h4(
-            align_correct=align_correct_nz,
-            align_shuffled=align_shuffled_nz,
-            patient_ids=patient_ids_nz,
+        result = context_specificity_test(
+            delta_model=correct_context_scores - context_free_scores,
+            delta_shuffled=shuffled_context_scores - context_free_scores,
+            delta_reference=delta_physician,
+            patient_ids=self._patient_ids,
+            n_bootstrap=self._n_bootstrap,
             n_permutations=self._n_permutations,
-            rng=rng_perm,
+            bootstrap_rng=np.random.default_rng(self._bootstrap_seed),
+            permutation_rng=np.random.default_rng(self._permutation_seed),
         )
-
         return {
-            "mean_diff": mean_diff,
-            "ci_lower": ci_lower,
-            "ci_upper": ci_upper,
-            "p_value": p_value,
+            key: result[key]
+            for key in ("mean_diff", "ci_lower", "ci_upper", "p_value")
         }

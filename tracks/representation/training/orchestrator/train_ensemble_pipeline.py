@@ -1369,6 +1369,21 @@ def train_ensemble_pipeline(
         _s2_fold_pure = np.full_like(Y_test_survey, np.nan)
         _s2_fold_pure_fold_ids = np.full(Y_test_survey.shape[0], -1, dtype=int)
         _failed_fold_pure = 0
+        # Shuffled-context control: the same fold-pure head, fed another
+        # patient's context vector (context_specificity).
+        from ..stage2.stage2_context import draw_shuffled_context_donors
+        _shuffled_seed = int(cfg.get("shuffled_context_seed", 123))
+        _s2_shuffled_fold_pure = np.full_like(Y_test_survey, np.nan)
+        if len(context_vectors) >= 2:
+            _shuffled_donors = draw_shuffled_context_donors(
+                patient_ids_test, list(context_vectors), seed=_shuffled_seed,
+            )
+        else:
+            logger.warning(
+                "Shuffled-context condition skipped: %d patient(s) have a context vector.",
+                len(context_vectors),
+            )
+            _shuffled_donors = None
         for _pi, _pid in enumerate(patient_ids_test):
             _fi = _patient_to_fold.get(int(float(_pid)), None)
             if _fi is not None:
@@ -1385,12 +1400,28 @@ def train_ensemble_pipeline(
                     _Z_pi = _bfm_fp(_X_pi, [_pid], _ctx_pi, fusion_strategy=_fs, r=_r)
                     _ycf_pi = ensemble_artifacts["ycf_test_probs"][_fi][_pi:_pi+1]
                     _s2_fold_pure[_pi:_pi+1] = _apply_fp(_s2m, _Z_pi, y_cf=_ycf_pi)
+                    if _shuffled_donors is not None:
+                        _Z_sh = _bfm_fp(_X_pi, [_shuffled_donors[_pi]], _ctx_pi, fusion_strategy=_fs, r=_r)
+                        _s2_shuffled_fold_pure[_pi:_pi+1] = _apply_fp(_s2m, _Z_sh, y_cf=_ycf_pi)
                     _s2_fold_pure_fold_ids[_pi] = _fi
                 else:
                     _failed_fold_pure += 1
             else:
                 _failed_fold_pure += 1
         _s2_meta_base["fold_pure_verification_failed"] = bool(_failed_fold_pure)
+
+        # Donor of each row's shuffled context, for audit.
+        if _shuffled_donors is None:
+            _s2_shuffled_fold_pure = None
+        else:
+            try:
+                pd.DataFrame({
+                    "row": np.arange(len(patient_ids_test)),
+                    "patient_id": [int(float(p)) for p in patient_ids_test],
+                    "shuffled_patient_id": _shuffled_donors,
+                }).to_csv(paths.ensemble_root / "test_shuffled_context_map.csv", index=False)
+            except Exception as _map_exc:
+                logger.warning("Failed to write shuffled-context map: %s", _map_exc)
 
         # Transductive/averaged: average across all Stage 2 models (diagnostic only).
         _n_s2_models = sum(1 for m in ensemble_artifacts["stage2"] if m is not None)
@@ -1517,6 +1548,9 @@ def train_ensemble_pipeline(
         _s2_fold_pure = None
     if '_s2_transductive' not in locals():
         _s2_transductive = None
+    if '_s2_shuffled_fold_pure' not in locals():
+        _s2_shuffled_fold_pure = None
+        _shuffled_donors = None
     result: dict = {
         "train": macro_train,
         "test": macro_test,
@@ -1526,6 +1560,8 @@ def train_ensemble_pipeline(
         "test_probs_ca": test_probs,                   # Stage 2 context-aware (or Stage 1 if no Stage 2)
         "test_probs_ca_fold_pure": _s2_fold_pure,      # Clean fold-pure Stage 2 predictions
         "test_probs_ca_transductive": _s2_transductive, # Diagnostic transductive Stage 2 predictions
+        "test_probs_shuffled_fold_pure": _s2_shuffled_fold_pure,  # Fold-pure Stage 2 with another patient's context
+        "shuffled_context_donors": _shuffled_donors,   # (n_test,) patient whose context each row was given
         "avg_thresh_f1opt": avg_thresh,                # (n_classes,) mean inner-fold F1-optimal thresholds
         "arch_predictions": arch_predictions,          # {arch_name: (n_test, n_classes)} or None
         "cv": _cv_record(

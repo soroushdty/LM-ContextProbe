@@ -52,6 +52,9 @@ activation: gelu
 # CORE TRAINING
 # =============================================================================
 global_seed: 42
+# Seed for the shuffled-context control: each test row's Stage 2 head is also
+# fed a context drawn from another patient (context_specificity).
+shuffled_context_seed: 123
 num_epochs: 50
 
 # =============================================================================

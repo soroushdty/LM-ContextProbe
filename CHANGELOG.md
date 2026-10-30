@@ -4,6 +4,12 @@
 
 The first archived release (Zenodo DOI). Endpoints and tests are **protocol v1**.
 
+- **Shuffled-context condition and `context_specificity` for Track 1** (#11). Track 1 only compared context-free with correct-context predictions, so it could not tell whether the model used *this* patient's context or responded to any context at all.
+  - Every test row is now also scored by its fold-pure Stage 2 head with another patient's context vector. Donors are drawn per row from the other patients, as in Track 3, with `shuffled_context_seed` (new in `configs/training_config.yaml`, default 123). The pipeline returns `test_probs_shuffled_fold_pure` and `shuffled_context_donors`, and writes the donors to `model/test_shuffled_context_map.csv`.
+  - Track 1's statistical analysis reports `context_specificity` with the statistic and test Track 3 uses: `context_specificity_pooled.json` (pooled over eligible classes; confirmatory) and `context_specificity_per_class.csv` (BH across eligible classes). Both tracks call the new `shared.evaluation.hypothesis_analyzer.context_specificity_test`; Track 3's values are unchanged.
+  - The test has its own seeded generator, so all other Track 1 outputs are unchanged.
+  - `pytest-xdist` is a dev dependency; the suite runs in parallel with `python -m pytest -n auto`.
+
 - **Decoder LLMs as the Track 1 representation model** (#29). The embedding code assumed a BERT-style encoder. A decoder model (for example the family Track 3 prompts) now works as `llm`, see `shared/embeddings/README.md`:
   - `pooling: last_token` takes the last non-padding token, the only one that has seen the whole input under causal attention. `pooling: none` (first token) on a decoder logs a warning.
   - `embedding_backend` (`auto`, `transformers`, `sentence_transformers`). `auto`, the default, keeps the old behaviour for `pooling: mean`. For any other pooling it now goes straight to `transformers`, because the SentenceTransformer path used to ignore `pooling` and silently apply mean pooling. **A config with `pooling` other than `mean` and the default backend now gives different embeddings than before**, and the run logs a warning saying so.

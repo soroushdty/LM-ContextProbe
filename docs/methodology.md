@@ -51,7 +51,7 @@ Each candidate model scores each (patient, item) pair under up to three conditio
 | `correct_context` | Item text + this patient's snapshot | Treatment |
 | `shuffled_context` | Item text + a different patient's snapshot | Negative control |
 
-The shuffled patient is drawn uniformly from the other patients, with a fixed seed (`shuffled_context_seed`); the mapping is saved for audit. Scores are per-category values in [0, 1]. The model delta is
+The shuffled patient is drawn uniformly from the other patients, separately for each (patient, item) pair, with a fixed seed (`shuffled_context_seed`); the mapping is saved for audit. Track 1 has no prompt: its shuffled-context score feeds the Stage 2 head the donor patient's context vector instead of the item's own patient's (see [Track 1](#track-1-tracksrepresentationstatistical)). Scores are per-category values in [0, 1]. The model delta is
 
 ```
 Δ_model(i, c) = score_correct_context(i, c) − score_context_free(i, c)
@@ -84,7 +84,7 @@ Earlier versions numbered hypotheses per track, and the numbers clashed: Track 1
 | `context_sensitivity` | Does the correct patient's context change the model's scores more than another patient's context does? | ✓ (formerly H1) | — |
 | `directional_alignment` | Does the score change in the same direction as the reference observers' judgment? | ✓ (formerly H2) | ✓ (formerly H1) |
 | `class_correspondence` | Do the categories that shift most for the reference observers also shift most for the model? | ✓ (formerly H3) | — |
-| `context_specificity` | Is the alignment specific to the correct patient's context, compared with a shuffled context? | ✓ (formerly H4) | — (needs a shuffled condition, [#11](https://github.com/soroushdty/LM-ContextProbe/issues/11)) |
+| `context_specificity` | Is the alignment specific to the correct patient's context, compared with a shuffled context? | ✓ (formerly H4) | ✓ |
 | `brier_improvement` | Does context bring the scores closer to the correct-context reference labels? | — | ✓ (formerly H2) |
 
 ### Track 3 (`shared/evaluation/hypothesis_analyzer.py`)
@@ -110,6 +110,9 @@ Confirmatory analyses are restricted to categories with at least `confirmatory_m
 | **`directional_alignment`, pooled** | Sign-agreement rate pooled over eligible classes | Permutation test that shuffles model deltas among the items of the same patient (tests item-level specificity within patients); patient-cluster bootstrap CI |
 | **`directional_alignment`, across classes** | Mantel–Haenszel common odds ratio, stratified by class | One-sided within-patient permutation test of the odds ratio > 1 (`p_permutation`); the CMH p-value (`p_cmh`) and the sign-flip test of pooled agreement > 0.5 (`p_cluster`) are kept for reference only |
 | **`brier_improvement`** | Per-class Brier improvement `Brier(context_free) − Brier(correct_context)` against correct-context labels | One-sided patient-cluster sign-flip test (`cluster_p`); Benjamini–Hochberg; patient-cluster bootstrap CI; macro summary. The Wilcoxon signed-rank p-value (`wilcoxon_p`) is kept for reference only |
+| **`context_specificity`** | Track 3's statistic (the same function, `context_specificity_test`): on cells with Δ_ref ≠ 0, mean of `sign(Δ_ref)·(Δ_model − Δ_shuffled)`, pooled over eligible classes (confirmatory) and per class | One-sided patient-cluster sign-flip test; patient-cluster bootstrap CI; Benjamini–Hochberg across eligible classes for the per-class p-values |
+
+**Track 1's shuffled-context condition.** Every test row is scored a second time by the same fold-pure Stage 2 head (the one from the outer fold that held out the row's patient) with the same item embedding and context-free score, but with a donor patient's context vector in place of its own. Donors are drawn as in Track 3, per row, from the other patients that have a context vector (`shuffled_context_seed` in `configs/training_config.yaml`). The donor of each row is written to `model/test_shuffled_context_map.csv`. Track 1's shuffled-context score therefore asks whether the head responds to *this* patient's context or to having any context at all.
 
 Secondary and descriptive outputs: Wasserstein distance to the label distribution, ICC(2,1) and Lin's CCC of the model against each observer compared with observer–observer agreement, expected calibration error, context-induced entropy change, repeated vs novel item strata, per-field context ablation, and fusion-architecture comparison.
 
@@ -118,7 +121,7 @@ Secondary and descriptive outputs: Wasserstein distance to the label distributio
 - **Bootstrap.** All confidence intervals are percentile intervals from a patient-cluster bootstrap (`shared/statistical/bootstrap.py`): whole patients are resampled with replacement, default 1,000 resamples. With fewer than two patients the CI is reported as NaN.
 - **Permutation tests.** Default 10,000 permutations. p-values are one-sided, in the direction of the hypothesis.
 - **Within-patient permutation test** (`within_cluster_permutation_test` in `shared/statistical/cluster_tests.py`). Used for every `directional_alignment` test in both tracks (Track 1's pooled test has its own implementation of the same null in `h1.py`). A test against 0.5 would be fooled by a model whose deltas mostly go the way most reference deltas go. Model delta rows are shuffled among the items of each patient while the reference deltas stay in place, so the test asks whether the model matches the reference on *the same item*, not only on the patient's items in general. Patients with a single item contribute nothing to the null.
-- **Patient-cluster sign-flip test** (`shared/statistical/cluster_tests.py`). Used wherever a test compares cell-level values with zero (`context_sensitivity` and `context_specificity` in Track 3; `brier_improvement` in Track 1, and the reference-only `cluster_p` / `p_cluster` of Track 1's `directional_alignment`). Under the null, each patient's summed contribution is symmetric about zero, so its sign is flipped as a block; the statistic is the mean over cells. When `2^(number of patients)` is at most the permutation count, all sign patterns are enumerated and the test is exact. **The smallest attainable p-value is then `2^−(number of patients)`**: 1/64 with six patients, 1/1024 with ten. This floor is the real limit of a design with that many patients, not an artifact of the test. Tests that treat cells as independent (`binom_p`, `p_cmh`, `wilcoxon_p`) are still written to the outputs for comparison but are not used for decisions.
+- **Patient-cluster sign-flip test** (`shared/statistical/cluster_tests.py`). Used wherever a test compares cell-level values with zero (`context_sensitivity` in Track 3; `context_specificity` in both tracks; `brier_improvement` in Track 1, and the reference-only `cluster_p` / `p_cluster` of Track 1's `directional_alignment`). Under the null, each patient's summed contribution is symmetric about zero, so its sign is flipped as a block; the statistic is the mean over cells. When `2^(number of patients)` is at most the permutation count, all sign patterns are enumerated and the test is exact. **The smallest attainable p-value is then `2^−(number of patients)`**: 1/64 with six patients, 1/1024 with ten. This floor is the real limit of a design with that many patients, not an artifact of the test. Tests that treat cells as independent (`binom_p`, `p_cmh`, `wilcoxon_p`) are still written to the outputs for comparison but are not used for decisions.
 - **Multiplicity.** Track 1 applies Benjamini–Hochberg (q = 0.05) across classes. Track 3 reports per-category results descriptively and does not correct them.
 - **Seeds.** Bootstrap, permutation, shuffled-context and generation seeds are set in config and recorded in the run manifest. `PYTHONHASHSEED` must be set before Python starts (see the README).
 
@@ -128,7 +131,7 @@ The evaluation protocol (the endpoints, their statistics and tests, and the defa
 
 | Protocol | First release | Changes |
 |----------|---------------|---------|
-| 1 | 0.2.0 | First versioned protocol: the endpoints and tests described on this page, including the shuffled-context reference for `context_sensitivity` and the within-patient permutation null for `directional_alignment` ([#17](https://github.com/soroushdty/LM-ContextProbe/issues/17)) |
+| 1 | 0.2.0 | First versioned protocol: the endpoints and tests described on this page, including the shuffled-context reference for `context_sensitivity`, the within-patient permutation null for `directional_alignment` ([#17](https://github.com/soroushdty/LM-ContextProbe/issues/17)), and Track 1's shuffled-context condition and `context_specificity` ([#11](https://github.com/soroushdty/LM-ContextProbe/issues/11)) |
 
 ## Design decisions and what they guard against
 
@@ -156,5 +159,6 @@ Results are claims about **the patients and reference observers in the evaluated
 These are known gaps between the intended design and the current code.
 
 - **`class_correspondence` is a correlation over the number of categories** (ten by default), so it has little power and is best read descriptively.
+- **Track 1's shuffled context is not new to the Stage 2 head.** Under leave-one-patient-out, the head that scores a patient was fitted on every other patient's rows, so the donor's context vector was in its training data while the patient's own context was not. A head that has partly memorized a donor's context can shift the scores further with it than with the unseen correct context. Where those shifts follow the direction most physicians shift in, they raise the shuffled-context alignment, so the test is conservative rather than anti-conservative. Track 3's model is not trained, so it has no such asymmetry.
 - **No simulation-based validation yet.** The false-positive rate and power of the endpoints under known effects have not been measured. ([#18](https://github.com/soroushdty/LM-ContextProbe/issues/18))
 - **One dataset format so far** (the paired-context workbook; [#6](https://github.com/soroushdty/LM-ContextProbe/issues/6)). The label taxonomy is configurable ([`docs/adapters.md`](adapters.md#label-space-sharedlabel_spacepy)).
