@@ -262,6 +262,7 @@ def run_statistical_analysis(
     item_texts_train: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
     X_items_test: np.ndarray | None = None,
+    y_hat_ca_leave_pair_out: np.ndarray | None = None,
     y_hat_shuffled: np.ndarray | None = None,
 ) -> None:
     """Run all statistical analyses and save outputs to output_dir.
@@ -271,8 +272,11 @@ def run_statistical_analysis(
         y_interview:        (n_pairs, n_classes) pair-aggregated interview labels.
         y_hat_cf:           (n_pairs, n_classes) context-free predictions (Stage 1 only).
         y_hat_ca:           (n_pairs, n_classes) context-aware predictions (Stage 2).
-        y_hat_shuffled:     (n_pairs, n_classes) Stage 2 predictions with another
-                            patient's context; context specificity is skipped if None.
+        y_hat_ca_leave_pair_out, y_hat_shuffled:
+                            (n_pairs, n_classes) predictions of the leave-pair-out
+                            Stage 2 heads with the row's own context and with its
+                            swap partner's. Context specificity compares the two;
+                            it is skipped if either is None.
         patient_ids:        (n_pairs,) patient IDs.
         item_texts:         (n_pairs,) item text strings.
         class_list:         Class names, length n_classes.
@@ -441,19 +445,22 @@ def run_statistical_analysis(
     # ------------------------------------------------------------------
     # Step 6.5 — Context specificity (correct vs shuffled context)
     # ------------------------------------------------------------------
-    if y_hat_shuffled is not None:
+    if y_hat_ca_leave_pair_out is not None and y_hat_shuffled is not None:
         from ..hypotheses.context_specificity import (
             context_specificity_per_class,
             context_specificity_pooled,
         )
+        # Both conditions come from the same leave-pair-out head, not from the
+        # fold-pure head behind delta_m (see docs/methodology.md).
+        delta_m_pair = compute_model_deltas(y_hat_cf, y_hat_ca_leave_pair_out)
         delta_s = compute_model_deltas(y_hat_cf, y_hat_shuffled)
         spec_pooled = context_specificity_pooled(
-            delta_p, delta_m, delta_s, patient_ids, eligible_classes, class_list,
+            delta_p, delta_m_pair, delta_s, patient_ids, eligible_classes, class_list,
             n_resamples=n_resamples, n_permutations=n_permutations, rng=spec_rng,
         )
         _save_json(output_dir / "context_specificity_pooled.json", spec_pooled)
         spec_df = context_specificity_per_class(
-            delta_p, delta_m, delta_s, patient_ids, class_list, eligible_classes,
+            delta_p, delta_m_pair, delta_s, patient_ids, class_list, eligible_classes,
             n_resamples=n_resamples, n_permutations=n_permutations, rng=spec_rng,
         )
         _save_csv(output_dir / "context_specificity_per_class.csv", spec_df)

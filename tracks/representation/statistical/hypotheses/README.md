@@ -300,8 +300,9 @@ patient-level bootstrap CI. The `n_classes_significant` count is derived directl
 **Research question:** Does the model move toward the physicians more with the correct patient's context than with
 another patient's?
 
-`Δ_shuffled = ŷ_shuffled − ŷ_cf`, where `ŷ_shuffled` is the fold-pure Stage 2 prediction with a donor patient's
-context vector (see the shuffled-context condition in `docs/methodology.md`). On cells with `Δ_p ≠ 0` the statistic is
+`Δ_m` and `Δ_shuffled` both come from a leave-pair-out Stage 2 head, which saw neither the patient nor its swap
+partner: `Δ_m` with the patient's own context vector and `Δ_shuffled` with the partner's (see Track 1's
+shuffled-context condition in `docs/methodology.md`). On cells with `Δ_p ≠ 0` the statistic is
 the mean of `sign(Δ_p)·(Δ_m − Δ_shuffled)`. Both functions call
 `shared.evaluation.hypothesis_analyzer.context_specificity_test`, the function Track 3 uses, so the two tracks report
 the same quantity. Rows with NaN in any delta are left out.

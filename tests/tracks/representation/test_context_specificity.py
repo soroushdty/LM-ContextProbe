@@ -15,62 +15,130 @@ from tracks.representation.statistical.hypotheses.context_specificity import (
     context_specificity_per_class,
     context_specificity_pooled,
 )
+from tracks.representation.training.orchestrator import train_ensemble_pipeline as tep
 from tracks.representation.training.stage2.stage2_context import (
-    draw_shuffled_context_donors,
+    pair_patients_for_context_swap,
 )
 
 # ---------------------------------------------------------------------------
-# Donor draws
+# Pairing
 # ---------------------------------------------------------------------------
 
 
-class TestDrawShuffledContextDonors:
-    def test_no_row_gets_its_own_patient(self):
-        pids = np.repeat(np.arange(1, 6), 20)
-        donors = draw_shuffled_context_donors(pids, list(range(1, 6)), seed=0)
-        assert donors.shape == pids.shape
-        assert not np.any(donors == pids)
+class TestPairPatientsForContextSwap:
+    @pytest.mark.parametrize("n", [2, 3, 6, 7])
+    def test_every_patient_in_exactly_one_group(self, n):
+        groups = pair_patients_for_context_swap(range(1, n + 1), seed=0)
+        members = [p for g in groups for p in g]
+        assert sorted(members) == list(range(1, n + 1))
+        sizes = sorted(len(g) for g in groups)
+        assert sizes == [2] * (n // 2 - 1) + ([3] if n % 2 else [2])
 
-    def test_donors_come_from_the_pool(self):
-        pids = np.repeat(np.arange(1, 6), 20)
-        donors = draw_shuffled_context_donors(pids, [1, 2, 3], seed=0)
-        assert set(donors) <= {1, 2, 3}
-        assert not np.any(donors == pids)
+    def test_same_seed_same_groups(self):
+        a = pair_patients_for_context_swap(range(10), seed=7)
+        assert a == pair_patients_for_context_swap(range(10), seed=7)
+        assert a != pair_patients_for_context_swap(range(10), seed=8)
 
-    def test_same_seed_same_donors(self):
-        pids = np.repeat(np.arange(1, 6), 10)
-        a = draw_shuffled_context_donors(pids, list(range(1, 6)), seed=7)
-        b = draw_shuffled_context_donors(pids, list(range(1, 6)), seed=7)
-        c = draw_shuffled_context_donors(pids, list(range(1, 6)), seed=8)
-        np.testing.assert_array_equal(a, b)
-        assert not np.array_equal(a, c)
+    def test_input_order_and_duplicates_do_not_matter(self):
+        a = pair_patients_for_context_swap([1, 2, 3, 4, 5], seed=3)
+        b = pair_patients_for_context_swap([5, 3, 3, 1, 4, 2, 2], seed=3)
+        assert a == b
 
-    def test_pool_order_does_not_matter(self):
-        pids = np.repeat(np.arange(1, 6), 10)
-        a = draw_shuffled_context_donors(pids, [1, 2, 3, 4, 5], seed=3)
-        b = draw_shuffled_context_donors(pids, [5, 3, 1, 4, 2], seed=3)
-        np.testing.assert_array_equal(a, b)
-
-    def test_draws_cover_all_other_patients(self):
-        pids = np.full(400, 1)
-        donors = draw_shuffled_context_donors(pids, [1, 2, 3, 4], seed=0)
-        assert set(donors) == {2, 3, 4}
-
-    def test_no_other_patient_raises(self):
-        with pytest.raises(ValueError, match="no other patient"):
-            draw_shuffled_context_donors(np.array([1, 1]), [1], seed=0)
+    def test_fewer_than_two_patients(self):
+        assert pair_patients_for_context_swap([4, 4], seed=0) == []
 
 
 # ---------------------------------------------------------------------------
-# Pipeline: fold-pure shuffled-context predictions
+# Leave-pair-out scoring
+# ---------------------------------------------------------------------------
+
+
+def _swap_inputs(n_patients=6, items=4, d=6, k=2, same_context=False):
+    rng = np.random.default_rng(0)
+    pids = np.repeat(np.arange(1, n_patients + 1), items)
+    n = pids.size
+    shared = rng.standard_normal(d).astype(np.float32)
+    ctx = {
+        p: shared.copy() if same_context else rng.standard_normal(d).astype(np.float32)
+        for p in range(1, n_patients + 1)
+    }
+    cfg = {
+        "stage2_alpha_options": [0.1], "stage2_lr": 0.05, "stage2_num_epochs": 20,
+        "stage2_early_stopping_patience": 5, "fusion_strategy": "2d",
+        "shuffled_context_seed": 5, "calibration_min_samples": 3,
+    }
+    return {
+        "X_test": rng.standard_normal((n, d)).astype(np.float32),
+        "Y_test_interview": (rng.random((n, k)) > 0.4).astype(np.float32),
+        "Y_test_survey": (rng.random((n, k)) > 0.6).astype(np.float32),
+        "patient_ids_test": pids,
+        "context_vectors": ctx,
+        "y_cf": rng.uniform(0.1, 0.9, (n, k)).astype(np.float32),
+        "class_list": [f"c{i}" for i in range(k)],
+        "cfg": cfg,
+    }
+
+
+class TestLeavePairOutContextSwap:
+    def test_heads_never_see_the_patients_they_score(self, monkeypatch):
+        fitted_on = []
+        real_fit = tep._fit_stage2_head
+
+        def spy(X_rows, patient_ids_rows, *args, **kwargs):
+            fitted_on.append(set(np.asarray(patient_ids_rows).tolist()))
+            return real_fit(X_rows, patient_ids_rows, *args, **kwargs)
+
+        monkeypatch.setattr(tep, "_fit_stage2_head", spy)
+        inputs = _swap_inputs()
+        out = tep._leave_pair_out_context_swap(**inputs)
+
+        assert len(fitted_on) == len(out["groups"]) == 3
+        for group, seen in zip(out["groups"], fitted_on):
+            assert seen.isdisjoint(group)
+            assert seen == set(range(1, 7)) - set(group)
+
+    def test_donor_is_the_swap_partner(self):
+        inputs = _swap_inputs(n_patients=7)
+        out = tep._leave_pair_out_context_swap(**inputs)
+        pids = inputs["patient_ids_test"]
+        partner = {}
+        for g in out["groups"]:
+            for i, p in enumerate(g):
+                partner[p] = g[(i + 1) % len(g)]
+        np.testing.assert_array_equal(out["donors"], [partner[p] for p in pids])
+        assert not np.any(out["donors"] == pids)
+
+    def test_only_the_context_differs(self):
+        """With every patient given the same context vector, the swap changes
+        nothing: correct and shuffled come from the same head, item and ŷ_cf."""
+        out = tep._leave_pair_out_context_swap(**_swap_inputs(same_context=True))
+        np.testing.assert_allclose(out["correct"], out["shuffled"], rtol=0, atol=1e-6)
+
+    def test_distinct_contexts_move_the_scores(self):
+        out = tep._leave_pair_out_context_swap(**_swap_inputs())
+        assert not np.isnan(out["correct"]).any()
+        assert np.nanmax(np.abs(out["correct"] - out["shuffled"])) > 1e-3
+
+    def test_rows_without_stage1_prediction_are_not_scored(self):
+        inputs = _swap_inputs()
+        inputs["y_cf"][:2] = np.nan
+        out = tep._leave_pair_out_context_swap(**inputs)
+        assert np.isnan(out["correct"][:2]).all() and np.isnan(out["shuffled"][:2]).all()
+        assert (out["donors"][:2] == -1).all()
+        assert not np.isnan(out["correct"][2:]).any()
+
+    def test_skipped_with_one_patient(self):
+        inputs = _swap_inputs()
+        inputs["context_vectors"] = {1: inputs["context_vectors"][1]}
+        assert tep._leave_pair_out_context_swap(**inputs) is None
+
+
+# ---------------------------------------------------------------------------
+# Pipeline
 # ---------------------------------------------------------------------------
 
 
 def _run_pipeline(tmp_path, context_vectors=None, n_features=8, n_classes=2):
-    from tracks.representation.training.orchestrator.train_ensemble_pipeline import (
-        train_ensemble_pipeline,
-    )
-
     rng = np.random.default_rng(0)
     n_patients, items = 4, 3
     n_train = n_patients * items
@@ -101,7 +169,7 @@ def _run_pipeline(tmp_path, context_vectors=None, n_features=8, n_classes=2):
         "stage2_num_epochs": 5, "stage2_early_stopping_patience": 3,
         "fusion_strategy": "2d", "shuffled_context_seed": 11,
     }
-    result = train_ensemble_pipeline(
+    result = tep.train_ensemble_pipeline(
         X_train, Y_train, patient_ids_train, X_test, Y_test, cfg,
         patient_ids_test=patient_ids_test,
         Y_test_interview=(rng.random((n_train, n_classes)) > 0.5).astype(np.float32),
@@ -112,45 +180,29 @@ def _run_pipeline(tmp_path, context_vectors=None, n_features=8, n_classes=2):
 
 
 class TestPipelineShuffledContext:
-    def test_shuffled_predictions_are_returned_with_donors(self, tmp_path):
+    def test_predictions_and_audit_map_are_returned(self, tmp_path):
         result, pids, model_dir = _run_pipeline(tmp_path)
-        shuffled = result["test_probs_shuffled_fold_pure"]
-        ca = result["test_probs_ca_fold_pure"]
-        assert shuffled.shape == ca.shape
-        # Scored wherever the correct-context prediction was.
-        np.testing.assert_array_equal(np.isnan(shuffled), np.isnan(ca))
-        assert np.all((shuffled[~np.isnan(shuffled)] >= 0) & (shuffled[~np.isnan(shuffled)] <= 1))
-        # Distinct contexts move the scores (else the equality test below is vacuous).
-        assert np.nanmax(np.abs(shuffled - ca)) > 1e-3
+        correct = result["test_probs_ca_leave_pair_out"]
+        shuffled = result["test_probs_shuffled_leave_pair_out"]
+        assert correct.shape == shuffled.shape == result["test_probs_ca_fold_pure"].shape
+        assert not np.isnan(correct).any() and not np.isnan(shuffled).any()
 
         donors = result["shuffled_context_donors"]
         assert not np.any(donors == pids)
-        np.testing.assert_array_equal(
-            donors, draw_shuffled_context_donors(pids, [1, 2, 3, 4], seed=11)
-        )
+        groups = pair_patients_for_context_swap(range(1, 5), seed=11)
+        partner = {g[0]: g[1] for g in groups} | {g[1]: g[0] for g in groups}
+        np.testing.assert_array_equal(donors, [partner[p] for p in pids])
 
         audit = pd.read_csv(model_dir / "test_shuffled_context_map.csv")
         np.testing.assert_array_equal(audit["patient_id"], pids)
         np.testing.assert_array_equal(audit["shuffled_patient_id"], donors)
 
-    def test_only_the_context_differs_from_correct_context(self, tmp_path):
-        """With every patient given the same context vector, swapping the
-        context changes nothing, so the shuffled predictions must equal the
-        correct-context ones: same fold's head, same item, same ŷ_cf."""
-        shared_ctx = np.random.default_rng(1).standard_normal(8).astype(np.float32)
-        ctx = {p: shared_ctx.copy() for p in range(1, 5)}
-        result, _, _ = _run_pipeline(tmp_path, context_vectors=ctx)
-        np.testing.assert_allclose(
-            result["test_probs_shuffled_fold_pure"],
-            result["test_probs_ca_fold_pure"],
-            rtol=0, atol=1e-6,
-        )
-
     def test_skipped_when_only_one_patient_has_context(self, tmp_path):
         ctx = {1: np.random.default_rng(1).standard_normal(8).astype(np.float32)}
         result, _, model_dir = _run_pipeline(tmp_path, context_vectors=ctx)
         assert result["test_probs_ca_fold_pure"] is not None
-        assert result["test_probs_shuffled_fold_pure"] is None
+        assert result["test_probs_shuffled_leave_pair_out"] is None
+        assert result["test_probs_ca_leave_pair_out"] is None
         assert result["shuffled_context_donors"] is None
         assert not (model_dir / "test_shuffled_context_map.csv").exists()
 
@@ -282,6 +334,7 @@ class TestRunAnalysisWritesContextSpecificity:
             context_json=None, llm="none",
             cfg={"global_seed": 0, "statistical_analysis": {"confirmatory_min_nonzero": 1}},
             output_dir=out, n_resamples=50, n_permutations=200,
+            y_hat_ca_leave_pair_out=None if y_hat_shuffled is None else y_ca,
             y_hat_shuffled=None if y_hat_shuffled is None else y_hat_shuffled(y_cf),
         )
         return out

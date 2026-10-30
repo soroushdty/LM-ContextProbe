@@ -81,38 +81,32 @@ def build_context_vectors(
     return result
 
 
-def draw_shuffled_context_donors(
-    patient_ids: np.ndarray,
-    donor_pool: list[int],
-    seed: int,
-) -> np.ndarray:
-    """Pick another patient's context for every row (the shuffled-context control).
+def pair_patients_for_context_swap(patient_ids, seed: int) -> list[list[int]]:
+    """Group patients for the shuffled-context control, which swaps contexts within a group.
 
-    Each row's donor is drawn uniformly from ``donor_pool`` without the row's
-    own patient, as Track 3 does for its shuffled-context prompts, so no row
-    is scored with its own patient's context.
+    Patients are shuffled with ``seed`` and dealt into pairs; with an odd
+    number, the last group has three. Within a group, each patient is given
+    the next patient's context (the last is given the first's), so no
+    patient gets its own. Track 1 fits one Stage 2 head per group without any
+    of the group's patients, so the head has seen neither the patient's own
+    context nor the one it is swapped for.
 
     Args:
-        patient_ids: (n,) patient ID of each row.
-        donor_pool:  Patients whose context can be lent, normally those with a
-                     context vector.
-        seed:        Seed for the draws (``shuffled_context_seed``).
+        patient_ids: Patients to group (duplicates are ignored).
+        seed:        Seed for the grouping (``shuffled_context_seed``).
 
     Returns:
-        (n,) int array of donor patient IDs.
+        Groups of patient IDs, each of length 2 or 3. Empty with fewer than
+        two patients.
     """
-    rng = np.random.default_rng(seed)
-    pool = np.array(sorted({int(float(p)) for p in donor_pool}), dtype=int)
-    donors = np.empty(len(patient_ids), dtype=int)
-    for idx, pid in enumerate(patient_ids):
-        candidates = pool[pool != int(float(pid))]
-        if candidates.size == 0:
-            raise ValueError(
-                f"Cannot draw a shuffled context for patient {int(float(pid))}: "
-                "no other patient has a context vector."
-            )
-        donors[idx] = candidates[int(rng.integers(0, candidates.size))]
-    return donors
+    pool = np.array(sorted({int(float(p)) for p in patient_ids}), dtype=int)
+    if pool.size < 2:
+        return []
+    order = np.random.default_rng(seed).permutation(pool).tolist()
+    groups = [order[i:i + 2] for i in range(0, len(order) - len(order) % 2, 2)]
+    if len(order) % 2:
+        groups[-1].append(order[-1])
+    return groups
 
 
 def _build_2d_fusion(e_i: np.ndarray, c_p: np.ndarray) -> np.ndarray:

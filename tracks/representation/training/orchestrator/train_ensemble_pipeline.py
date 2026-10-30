@@ -297,6 +297,150 @@ def _compute_macro_metrics(y_true: np.ndarray, y_prob: np.ndarray, thresholds: n
     return {key: float(np.mean(values)) for key, values in per_class.items()}
 
 
+def _fit_stage2_head(
+    X_rows: np.ndarray,
+    patient_ids_rows: np.ndarray,
+    y_int_rows: np.ndarray,
+    y_survey_rows: np.ndarray,
+    y_cf_rows: np.ndarray,
+    context_vectors: dict,
+    class_list: list,
+    cfg: dict,
+    *,
+    baseline_metrics: dict | None = None,
+    metrics_df: pd.DataFrame | None = None,
+) -> dict:
+    """Fit a Stage 2 fusion head on the given rows and return its artifact.
+
+    Fits the optional Stage 2 PCA on ``X_rows``, builds the configured fusion
+    features (prepending ``y_cf_rows`` when ``stage2_use_cf_passthrough``),
+    and runs ``fit_stage2_fusion_fold``. The artifact can be passed to
+    ``apply_stage2_fusion``.
+    """
+    from ..stage2.fit_stage2_fusion import fit_stage2_fusion_fold
+    from ..stage2.stage2_context import build_fusion_matrix
+
+    fusion_strategy = cfg.get("fusion_strategy", "2d")
+    r = int(cfg.get("lowrank_bilinear_r", 8))
+
+    # --- Stage 2 PCA (optional) ---
+    pca = None
+    pca_k = cfg.get("stage2_pca_n_components", None)
+    if pca_k is not None:
+        from sklearn.decomposition import PCA as _PCA
+        pca = _PCA(n_components=int(pca_k), whiten=True)
+        pca.fit(X_rows)
+        X_fit = pca.transform(X_rows)
+        ctx_fit = {pid: pca.transform(cv.reshape(1, -1))[0]
+                   for pid, cv in context_vectors.items()}
+    else:
+        X_fit = X_rows
+        ctx_fit = context_vectors
+
+    Z = build_fusion_matrix(X_fit, patient_ids_rows, ctx_fit, fusion_strategy=fusion_strategy, r=r)
+    use_cf_pt = bool(cfg.get("stage2_use_cf_passthrough", False))
+    if use_cf_pt:
+        Z = np.concatenate([y_cf_rows.astype(np.float32), Z], axis=1)
+
+    model, calibrators = fit_stage2_fusion_fold(
+        Z_tr=Z,
+        y_int_tr=y_int_rows,
+        y_survey_tr=y_survey_rows,
+        y_cf_tr=y_cf_rows,
+        patient_ids_tr=patient_ids_rows,
+        class_list=class_list,
+        cfg=cfg,
+        baseline_metrics=baseline_metrics,
+        metrics_df=metrics_df,
+    )
+    return {
+        "model": model,
+        "pca": pca,
+        "use_cf_passthrough": use_cf_pt,
+        "fusion_strategy": fusion_strategy,
+        "r": r,
+        "calibrators": calibrators,
+        "class_list": class_list,
+    }
+
+
+def _leave_pair_out_context_swap(
+    X_test: np.ndarray,
+    Y_test_interview: np.ndarray,
+    Y_test_survey: np.ndarray,
+    patient_ids_test: np.ndarray,
+    context_vectors: dict,
+    y_cf: np.ndarray,
+    class_list: list,
+    cfg: dict,
+) -> dict | None:
+    """Score the shuffled-context control with heads that saw neither context.
+
+    Test patients with a context vector are grouped in pairs (see
+    ``pair_patients_for_context_swap``). For each group, a Stage 2 head is
+    fitted without any of the group's patients and scores each member's
+    rows twice: with the member's own context and with its swap partner's.
+    Both scores come from the same head, so their difference is due to the
+    context alone. A fold-pure head would have been trained on the partner's
+    rows, and a context it was trained on biases the comparison.
+
+    Args:
+        y_cf: (n_test, n_classes) fold-pure Stage 1 predictions; used as the
+            heads' ŷ_cf and passed to ``apply_stage2_fusion``. Rows with NaN
+            are left out of training and scoring.
+
+    Returns:
+        ``None`` when fewer than two patients have a context vector, else a
+        dict with ``correct`` and ``shuffled`` ((n_test, n_classes), NaN for
+        rows not scored), ``donors`` ((n_test,) partner patient, -1 if not
+        scored) and ``groups``.
+    """
+    from ..stage2.fit_stage2_fusion import apply_stage2_fusion, project_stage2_embeddings
+    from ..stage2.stage2_context import build_fusion_matrix, pair_patients_for_context_swap
+
+    pids = np.array([int(float(p)) for p in patient_ids_test])
+    with_ctx = [p for p in np.unique(pids) if int(p) in context_vectors]
+    groups = pair_patients_for_context_swap(with_ctx, seed=int(cfg.get("shuffled_context_seed", 123)))
+    if not groups:
+        logger.warning(
+            "Shuffled-context control skipped: %d test patient(s) have a context vector.",
+            len(with_ctx),
+        )
+        return None
+
+    correct = np.full(Y_test_interview.shape, np.nan, dtype=np.float32)
+    shuffled = np.full(Y_test_interview.shape, np.nan, dtype=np.float32)
+    donors = np.full(len(pids), -1, dtype=int)
+    usable = ~np.isnan(Y_test_interview).all(axis=1) & ~np.isnan(y_cf).any(axis=1)
+    for group in groups:
+        train = usable & ~np.isin(pids, group)
+        if not train.any():
+            logger.warning("Shuffled-context group %s: no other patients to fit a head on.", group)
+            continue
+        head = _fit_stage2_head(
+            X_test[train], pids[train], Y_test_interview[train], Y_test_survey[train],
+            y_cf[train], context_vectors, class_list, cfg,
+        )
+        for i, patient in enumerate(group):
+            partner = group[(i + 1) % len(group)]
+            rows = np.flatnonzero((pids == patient) & ~np.isnan(y_cf).any(axis=1))
+            if rows.size == 0:
+                continue
+            X_p, ctx_p = project_stage2_embeddings(head, X_test[rows], context_vectors)
+            for out, ctx_pid in ((correct, patient), (shuffled, partner)):
+                Z = build_fusion_matrix(
+                    X_p, np.full(rows.size, ctx_pid), ctx_p,
+                    fusion_strategy=head["fusion_strategy"], r=head["r"],
+                )
+                out[rows] = apply_stage2_fusion(head, Z, y_cf=y_cf[rows])
+            donors[rows] = partner
+    logger.info(
+        "Shuffled-context control: %d leave-pair-out Stage 2 heads, %d rows scored.",
+        len(groups), int((donors >= 0).sum()),
+    )
+    return {"correct": correct, "shuffled": shuffled, "donors": donors, "groups": groups}
+
+
 def train_ensemble_pipeline(
     X_train: np.ndarray,
     Y_train: np.ndarray,
@@ -898,9 +1042,6 @@ def train_ensemble_pipeline(
 
         _fold_stage2 = None
         if _use_fusion_stage2 and _y_cf_test_fold is not None:
-            from ..stage2.stage2_context import build_fusion_matrix
-            from ..stage2.fit_stage2_fusion import fit_stage2_fusion_fold
-
             # Stage 2 training items: test items from patients this outer fold
             # did not hold out that have at least one non-NaN interview label.
             _s2_mask = ~np.isin(
@@ -913,31 +1054,6 @@ def train_ensemble_pipeline(
             _s2_idx = np.where(_s2_mask)[0][_paired] if _s2_mask is not None else np.array([], dtype=int)
 
             if len(_s2_idx) > 0:
-                fusion_strategy = cfg.get("fusion_strategy", "2d")
-                r = int(cfg.get("lowrank_bilinear_r", 8))
-
-                # --- Stage 2 PCA (optional) ---
-                _s2_pca = None
-                _s2_pca_k = cfg.get("stage2_pca_n_components", None)
-                if _s2_pca_k is not None:
-                    from sklearn.decomposition import PCA as _PCA
-                    _s2_pca = _PCA(n_components=int(_s2_pca_k), whiten=True)
-                    _s2_pca.fit(X_test[_s2_idx])
-                    _X_s2 = _s2_pca.transform(X_test[_s2_idx])
-                    _ctx_s2 = {pid: _s2_pca.transform(cv.reshape(1, -1))[0]
-                               for pid, cv in context_vectors.items()}
-                else:
-                    _X_s2 = X_test[_s2_idx]
-                    _ctx_s2 = context_vectors
-
-                _Z_tr = build_fusion_matrix(
-                    _X_s2,
-                    patient_ids_test[_s2_idx],
-                    _ctx_s2,
-                    fusion_strategy=fusion_strategy,
-                    r=r,
-                )
-
                 # --- ŷ_cf passthrough ---
                 _use_cf_pt = bool(cfg.get("stage2_use_cf_passthrough", False))
                 # Default: outer fold's transductive CF (may be biased for inner val).
@@ -968,7 +1084,6 @@ def train_ensemble_pipeline(
                             "fold-pure cross-fitted ŷ_cf.",
                             fold_idx + 1, _n_xfit,
                         )
-                    _Z_tr = np.concatenate([_y_cf_s2.astype(np.float32), _Z_tr], axis=1)
                 # Compute per-class metrics for this fold (F1, Brier, ECE)
                 fold_metrics_df = compute_metrics_df(
                     _y_cf_test_fold[_s2_idx],
@@ -988,26 +1103,18 @@ def train_ensemble_pipeline(
                     for _, row in fold_metrics_df.iterrows() if row["Class"] not in ("Macro Average", "Micro Aggregate")
                 }
                 # Pass the full metrics DataFrame as well as legacy baseline_metrics
-                _fold_stage2_model, _s2_calibrators = fit_stage2_fusion_fold(
-                    Z_tr=_Z_tr,
-                    y_int_tr=Y_test_interview[_s2_idx],
-                    y_survey_tr=Y_test_survey[_s2_idx],
-                    y_cf_tr=_y_cf_s2,
-                    patient_ids_tr=patient_ids_test[_s2_idx],
-                    class_list=class_list,
-                    cfg=cfg,
+                _fold_stage2 = _fit_stage2_head(
+                    X_test[_s2_idx],
+                    patient_ids_test[_s2_idx],
+                    Y_test_interview[_s2_idx],
+                    Y_test_survey[_s2_idx],
+                    _y_cf_s2,
+                    context_vectors,
+                    class_list,
+                    cfg,
                     baseline_metrics=baseline_metrics,
                     metrics_df=fold_metrics_df,
                 )
-                _fold_stage2 = {
-                    "model": _fold_stage2_model,
-                    "pca":   _s2_pca,
-                    "use_cf_passthrough": bool(cfg.get("stage2_use_cf_passthrough", False)),
-                    "fusion_strategy": fusion_strategy,
-                    "r": r,
-                    "calibrators": _s2_calibrators,
-                    "class_list": class_list,
-                }
                 logger.info(
                     "Outer fold %d — Stage 2 fusion model fitted on %d items.",
                     fold_idx + 1, len(_s2_idx),
@@ -1369,21 +1476,6 @@ def train_ensemble_pipeline(
         _s2_fold_pure = np.full_like(Y_test_survey, np.nan)
         _s2_fold_pure_fold_ids = np.full(Y_test_survey.shape[0], -1, dtype=int)
         _failed_fold_pure = 0
-        # Shuffled-context control: the same fold-pure head, fed another
-        # patient's context vector (context_specificity).
-        from ..stage2.stage2_context import draw_shuffled_context_donors
-        _shuffled_seed = int(cfg.get("shuffled_context_seed", 123))
-        _s2_shuffled_fold_pure = np.full_like(Y_test_survey, np.nan)
-        if len(context_vectors) >= 2:
-            _shuffled_donors = draw_shuffled_context_donors(
-                patient_ids_test, list(context_vectors), seed=_shuffled_seed,
-            )
-        else:
-            logger.warning(
-                "Shuffled-context condition skipped: %d patient(s) have a context vector.",
-                len(context_vectors),
-            )
-            _shuffled_donors = None
         for _pi, _pid in enumerate(patient_ids_test):
             _fi = _patient_to_fold.get(int(float(_pid)), None)
             if _fi is not None:
@@ -1400,9 +1492,6 @@ def train_ensemble_pipeline(
                     _Z_pi = _bfm_fp(_X_pi, [_pid], _ctx_pi, fusion_strategy=_fs, r=_r)
                     _ycf_pi = ensemble_artifacts["ycf_test_probs"][_fi][_pi:_pi+1]
                     _s2_fold_pure[_pi:_pi+1] = _apply_fp(_s2m, _Z_pi, y_cf=_ycf_pi)
-                    if _shuffled_donors is not None:
-                        _Z_sh = _bfm_fp(_X_pi, [_shuffled_donors[_pi]], _ctx_pi, fusion_strategy=_fs, r=_r)
-                        _s2_shuffled_fold_pure[_pi:_pi+1] = _apply_fp(_s2m, _Z_sh, y_cf=_ycf_pi)
                     _s2_fold_pure_fold_ids[_pi] = _fi
                 else:
                     _failed_fold_pure += 1
@@ -1410,15 +1499,17 @@ def train_ensemble_pipeline(
                 _failed_fold_pure += 1
         _s2_meta_base["fold_pure_verification_failed"] = bool(_failed_fold_pure)
 
-        # Donor of each row's shuffled context, for audit.
-        if _shuffled_donors is None:
-            _s2_shuffled_fold_pure = None
-        else:
+        # Shuffled-context control (context_specificity): leave-pair-out heads.
+        _context_swap = _leave_pair_out_context_swap(
+            X_test, Y_test_interview, Y_test_survey, patient_ids_test,
+            context_vectors, _cf_fold_pure, class_list, cfg,
+        )
+        if _context_swap is not None:
             try:
                 pd.DataFrame({
                     "row": np.arange(len(patient_ids_test)),
                     "patient_id": [int(float(p)) for p in patient_ids_test],
-                    "shuffled_patient_id": _shuffled_donors,
+                    "shuffled_patient_id": _context_swap["donors"],
                 }).to_csv(paths.ensemble_root / "test_shuffled_context_map.csv", index=False)
             except Exception as _map_exc:
                 logger.warning("Failed to write shuffled-context map: %s", _map_exc)
@@ -1548,9 +1639,8 @@ def train_ensemble_pipeline(
         _s2_fold_pure = None
     if '_s2_transductive' not in locals():
         _s2_transductive = None
-    if '_s2_shuffled_fold_pure' not in locals():
-        _s2_shuffled_fold_pure = None
-        _shuffled_donors = None
+    if '_context_swap' not in locals() or _context_swap is None:
+        _context_swap = {"correct": None, "shuffled": None, "donors": None}
     result: dict = {
         "train": macro_train,
         "test": macro_test,
@@ -1560,8 +1650,10 @@ def train_ensemble_pipeline(
         "test_probs_ca": test_probs,                   # Stage 2 context-aware (or Stage 1 if no Stage 2)
         "test_probs_ca_fold_pure": _s2_fold_pure,      # Clean fold-pure Stage 2 predictions
         "test_probs_ca_transductive": _s2_transductive, # Diagnostic transductive Stage 2 predictions
-        "test_probs_shuffled_fold_pure": _s2_shuffled_fold_pure,  # Fold-pure Stage 2 with another patient's context
-        "shuffled_context_donors": _shuffled_donors,   # (n_test,) patient whose context each row was given
+        # Shuffled-context control: leave-pair-out heads, own and partner's context.
+        "test_probs_ca_leave_pair_out": _context_swap["correct"],
+        "test_probs_shuffled_leave_pair_out": _context_swap["shuffled"],
+        "shuffled_context_donors": _context_swap["donors"],  # (n_test,) partner patient, -1 if not scored
         "avg_thresh_f1opt": avg_thresh,                # (n_classes,) mean inner-fold F1-optimal thresholds
         "arch_predictions": arch_predictions,          # {arch_name: (n_test, n_classes)} or None
         "cv": _cv_record(

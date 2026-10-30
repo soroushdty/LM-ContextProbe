@@ -535,7 +535,8 @@ class TestStatisticsInputAlignment:
 
         check_keys = [
             "test_probs_cf", "test_probs_cf_fold_pure",
-            "test_probs_ca", "test_probs_ca_fold_pure", "test_probs_shuffled_fold_pure",
+            "test_probs_ca", "test_probs_ca_fold_pure",
+            "test_probs_ca_leave_pair_out", "test_probs_shuffled_leave_pair_out",
         ]
         for key in check_keys:
             arr = result.get(key)
@@ -641,8 +642,10 @@ class TestGroupKFoldPipeline:
         _, paths, _, _, _, _, _ = _run_kfold_pipeline(tmp_path)
         manifest = json.loads(paths.fold_manifest_json.read_text())
 
-        assert len(seen) == manifest["n_folds"]
-        for fold, s2_patients in zip(manifest["folds"], seen):
+        # One head per fold, then the shuffled-context control's leave-pair-out
+        # heads (checked in tests/tracks/representation/test_context_specificity.py).
+        assert len(seen) > manifest["n_folds"]
+        for fold, s2_patients in zip(manifest["folds"], seen[: manifest["n_folds"]]):
             assert s2_patients, "Stage 2 should have training patients"
             assert not set(s2_patients) & set(fold["held_out_patient_ids"]), (
                 f"Stage 2 for fold {fold['fold_id']} trained on held-out patients "

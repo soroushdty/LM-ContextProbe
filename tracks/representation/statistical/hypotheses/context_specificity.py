@@ -6,9 +6,10 @@ Track 3's H4); see shared/endpoints.py.  Both tracks call
 
 On cells with a non-zero physician delta, the alignment of a model delta is
 ``sign(Δ_p) · Δ_m``.  The statistic is the mean of
-``alignment(Δ_m) − alignment(Δ_shuffled)``, where Δ_shuffled is the change
-the fold-pure Stage 2 head makes when it is fed another patient's context
-vector.  A positive value means the model moves toward the physicians more
+``alignment(Δ_m) − alignment(Δ_shuffled)``. Both deltas come from the same
+leave-pair-out Stage 2 head, which saw neither the patient nor the patient
+whose context it is swapped for: Δ_m with the patient's own context vector
+and Δ_shuffled with the partner's.  A positive value means the model moves toward the physicians more
 with the correct patient's context than with another patient's, rather than
 shifting the same way whatever context it is given.
 
