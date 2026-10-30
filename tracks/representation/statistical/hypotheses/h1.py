@@ -17,6 +17,11 @@ deltas go agrees more than half the time without matching any particular
 item.  The null shuffles the model's deltas among the items of each patient
 and keeps the reference deltas in place, so it keeps how often and in which
 direction the model moves and breaks only the item-level match.
+
+Every test counts only cells where both the reference and the model moved
+(Δ_p ≠ 0 and Δ_m ≠ 0; ``shared.statistical.delta.sign_agreement_cells``).
+Counting a zero model delta as disagreement let a model that moves where
+the reference moves, in random directions, pass these tests (#36).
 """
 from __future__ import annotations
 
@@ -31,7 +36,11 @@ from shared.statistical.cluster_tests import (
     cluster_sign_flip_test,
     within_cluster_permutation_test,
 )
-from shared.statistical.delta import sign_agreement_mask
+from shared.statistical.delta import (
+    sign_agreement_cells,
+    sign_agreement_mask,
+    sign_agreement_rate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +89,8 @@ def h1_binomial_per_class(
 ) -> pd.DataFrame:
     """Per-class test of sign agreement against its chance level (H1 per-class).
 
-    For each class c, restricted to items with Δ_p(i,c) ≠ 0:
+    For each class c, restricted to items with Δ_p(i,c) ≠ 0 and Δ_m(i,c) ≠ 0
+    (``n_moved``; ``n_nonzero`` counts Δ_p ≠ 0 alone):
       - Compute sign agreement rate (proportion where sign(Δ_m)==sign(Δ_p))
       - Within-patient permutation test: the class's model deltas are
         shuffled among each patient's items, the reference deltas stay in
@@ -100,8 +110,8 @@ def h1_binomial_per_class(
     from ``rng`` so that the tests do not change the bootstrap draws.
 
     Returns a DataFrame with columns:
-      Class, n_nonzero, sign_agree_rate, ci_lower, ci_upper, null_rate,
-      perm_p, cluster_p, binom_p, bh_adj_p, confirmatory
+      Class, n_nonzero, n_moved, sign_agree_rate, ci_lower, ci_upper,
+      null_rate, perm_p, cluster_p, binom_p, bh_adj_p, confirmatory
     """
     dp = np.asarray(delta_p, dtype=np.float32)
     dm = np.asarray(delta_m, dtype=np.float32)
@@ -113,13 +123,15 @@ def h1_binomial_per_class(
     confirmatory_indices: list[int] = []
 
     for c_idx, cls in enumerate(class_list):
-        nz_mask = dp[:, c_idx] != 0.0
-        n_nz = int(nz_mask.sum())
+        n_nz = int((dp[:, c_idx] != 0.0).sum())
+        moved = sign_agreement_cells(dp[:, c_idx], dm[:, c_idx])
+        n_moved = int(moved.sum())
 
-        if n_nz == 0:
+        if n_moved == 0:
             rows.append({
                 "Class": cls,
-                "n_nonzero": 0,
+                "n_nonzero": n_nz,
+                "n_moved": 0,
                 "sign_agree_rate": float("nan"),
                 "ci_lower": float("nan"),
                 "ci_upper": float("nan"),
@@ -132,29 +144,26 @@ def h1_binomial_per_class(
             })
             continue
 
-        agree = sign_agreement_mask(dp[:, c_idx : c_idx + 1], dm[:, c_idx : c_idx + 1])
-        agree_1d = agree[:, 0][nz_mask]
-        pid_nz = pid[nz_mask]
+        agree_1d = sign_agreement_mask(dp[:, c_idx], dm[:, c_idx])[moved]
+        pid_moved = pid[moved]
 
         k = int(agree_1d.sum())
-        rate = float(k / n_nz)
+        rate = float(k / n_moved)
 
         # Patient-level bootstrap CI
-        point, ci_lo, ci_hi = bootstrap_rate(agree_1d, pid_nz, n_resamples, rng)
+        point, ci_lo, ci_hi = bootstrap_rate(agree_1d, pid_moved, n_resamples, rng)
 
         # Exact binomial test (unclustered; descriptive reference)
-        binom_p = float(binomtest(k, n_nz, p=0.5, alternative="greater").pvalue)
+        binom_p = float(binomtest(k, n_moved, p=0.5, alternative="greater").pvalue)
 
         # Patient-cluster sign-flip test against 0.5 (reference)
         cluster_p = cluster_sign_flip_test(
-            agree_1d.astype(float) - 0.5, pid_nz, n_permutations, perm_rng,
+            agree_1d.astype(float) - 0.5, pid_moved, n_permutations, perm_rng,
         )
 
         # Within-patient permutation test against chance (confirmatory)
-        sign_dp = np.sign(dp[:, c_idx])
-
-        def _rate(dm_col: np.ndarray, _sign_dp=sign_dp, _nz=nz_mask) -> float:
-            return float(np.mean((np.sign(dm_col) == _sign_dp)[_nz]))
+        def _rate(dm_col: np.ndarray, _dp=dp[:, c_idx]) -> float:
+            return sign_agreement_rate(_dp, dm_col)
 
         null = within_cluster_permutation_test(
             _rate, dm[:, c_idx], pid, n_permutations, null_rng,
@@ -165,6 +174,7 @@ def h1_binomial_per_class(
         rows.append({
             "Class": cls,
             "n_nonzero": n_nz,
+            "n_moved": n_moved,
             "sign_agree_rate": rate,
             "ci_lower": ci_lo,
             "ci_upper": ci_hi,
@@ -207,8 +217,9 @@ def h1_permutation_test(
 ) -> dict:
     """Patient-clustered permutation test on aggregate sign agreement (H1 aggregate).
 
-    Pooled over (item, class) pairs with non-zero physician delta across all
-    confirmatory-eligible classes (or all classes if eligible_classes is None).
+    Pooled over (item, class) pairs where both the physician and the model
+    delta are non-zero, across all confirmatory-eligible classes (or all
+    classes if eligible_classes is None).
 
     Permutation: model deltas are permuted within patient (entire patient row
     vector is permuted together within each patient block), preserving
@@ -233,16 +244,11 @@ def h1_permutation_test(
 
     # Observed aggregate rate
     def _aggregate_rate(dp_: np.ndarray, dm_: np.ndarray) -> float:
-        agree = sign_agreement_mask(dp_, dm_)
-        nz = dp_ != 0.0
-        total_nz = int(nz.sum())
-        if total_nz == 0:
-            return float("nan")
-        return float(agree.sum() / total_nz)
+        return sign_agreement_rate(dp_, dm_)
 
     observed = _aggregate_rate(dp, dm)
 
-    # Short-circuit: if there are no non-zero physician deltas (e.g. all dp == 0),
+    # Short-circuit: if no cell has both deltas non-zero (e.g. all dp == 0),
     # the statistic is undefined everywhere — return all NaN without running the
     # permutation loop (which would otherwise trigger np.nanmean("Mean of empty
     # slice") warnings on an all-NaN null_vals array).
@@ -312,12 +318,14 @@ def h1_cmh_test(
     stratified by physician-delta direction:
 
         Rows    — physician direction:  Δ_p > 0 (row 0) vs Δ_p < 0 (row 1)
-        Columns — model direction:      Δ_m > 0 (col 0) vs Δ_m ≤ 0 (col 1)
+        Columns — model direction:      Δ_m > 0 (col 0) vs Δ_m < 0 (col 1)
 
         Cell (0,0): Δ_p>0, Δ_m>0  → physician-model both positive (agree)
-        Cell (0,1): Δ_p>0, Δ_m≤0  → physician positive, model non-positive (disagree)
+        Cell (0,1): Δ_p>0, Δ_m<0  → physician positive, model negative (disagree)
         Cell (1,0): Δ_p<0, Δ_m>0  → physician negative, model positive (disagree)
-        Cell (1,1): Δ_p<0, Δ_m≤0  → physician-model both non-positive (agree)
+        Cell (1,1): Δ_p<0, Δ_m<0  → physician-model both negative (agree)
+
+        Cells where the model did not move (Δ_m = 0) are left out (#36).
 
         Columns are CONSISTENT across rows (both represent model direction),
         so the common odds ratio is interpretable: OR > 1 means the model
@@ -366,13 +374,14 @@ def h1_cmh_test(
         if pos.sum() == 0 or neg.sum() == 0:
             continue
 
-        # 2×2: rows = physician direction, cols = model direction (dm>0 vs dm≤0)
+        # 2×2: rows = physician direction, cols = model direction (dm>0 vs dm<0)
         # Columns have the SAME meaning across both rows — this is required for a
         # valid CMH common-odds-ratio test.
-        a = int((pos & (dm_col > 0.0)).sum())   # Δ_p>0, Δ_m>0  (agree for pos physician)
-        b = int((pos & (dm_col <= 0.0)).sum())  # Δ_p>0, Δ_m≤0  (disagree for pos physician)
-        c = int((neg & (dm_col > 0.0)).sum())   # Δ_p<0, Δ_m>0  (disagree for neg physician)
-        d = int((neg & (dm_col <= 0.0)).sum())  # Δ_p<0, Δ_m≤0  (agree for neg physician)
+        up, down = dm_col > 0.0, dm_col < 0.0
+        a = int((pos & up).sum())    # Δ_p>0, Δ_m>0  (agree for pos physician)
+        b = int((pos & down).sum())  # Δ_p>0, Δ_m<0  (disagree for pos physician)
+        c = int((neg & up).sum())    # Δ_p<0, Δ_m>0  (disagree for neg physician)
+        d = int((neg & down).sum())  # Δ_p<0, Δ_m<0  (agree for neg physician)
 
         # Skip if any margin is zero (degenerate for CMH)
         if (a + b) == 0 or (c + d) == 0 or (a + c) == 0 or (b + d) == 0:
@@ -381,10 +390,10 @@ def h1_cmh_test(
         tables.append(np.array([[a, b], [c, d]], dtype=float))
         included.append(c_idx)
         if pid is not None:
-            nz = pos | neg
-            agree = (pos & (dm_col > 0.0)) | (neg & (dm_col <= 0.0))
-            pooled_agree.append(agree[nz].astype(float))
-            pooled_pids.append(pid[nz])
+            moved = sign_agreement_cells(dp_col, dm_col)
+            agree = (pos & up) | (neg & down)
+            pooled_agree.append(agree[moved].astype(float))
+            pooled_pids.append(pid[moved])
 
     if not tables:
         return {
@@ -410,10 +419,11 @@ def h1_cmh_test(
         pos_inc, neg_inc = dp_inc > 0.0, dp_inc < 0.0
 
         def _mh_odds_ratio(dm_inc: np.ndarray) -> float:
-            up = dm_inc > 0.0
-            n = (pos_inc | neg_inc).sum(axis=0)
-            num = ((pos_inc & up).sum(axis=0) * (neg_inc & ~up).sum(axis=0) / n).sum()
-            den = ((pos_inc & ~up).sum(axis=0) * (neg_inc & up).sum(axis=0) / n).sum()
+            up, down = dm_inc > 0.0, dm_inc < 0.0
+            n = ((pos_inc | neg_inc) & (up | down)).sum(axis=0)
+            n = np.where(n == 0, 1, n)  # a stratum with no moved cells adds 0
+            num = ((pos_inc & up).sum(axis=0) * (neg_inc & down).sum(axis=0) / n).sum()
+            den = ((pos_inc & down).sum(axis=0) * (neg_inc & up).sum(axis=0) / n).sum()
             if den == 0.0:
                 return float("inf") if num > 0.0 else float("nan")
             return float(num / den)

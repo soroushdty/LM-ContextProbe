@@ -176,15 +176,20 @@ class TestDirectionalAlignmentReference:
         assert res["p_value"] < 0.01
         assert math.isnan(res["sign_agreement_rate_shuffled"])
 
-    def test_zero_model_deltas_lower_the_chance_level(self):
-        """With the model unmoved on half the shift cells, chance agreement is near 0.25, not 0.5."""
+    def test_zero_model_deltas_are_left_out(self):
+        """Cells where the model did not move count neither way (#36): with the
+        model unmoved on half the shift cells and random elsewhere, chance
+        agreement stays near 0.5, and the unmoved share is reported apart."""
         dp = _item_signs(1)
         noise = _item_signs(3)
         cc = CF + 0.1 * noise
         cc[: N // 2] = CF[: N // 2]
         res = _analyzer().compute_h2(CF, cc, dp)
         assert res["zero_delta_rate"] == pytest.approx(0.5)
-        assert res["null_sign_agreement_rate"] == pytest.approx(0.25, abs=0.08)
+        assert res["null_sign_agreement_rate"] == pytest.approx(0.5, abs=0.08)
+        moved = cc != CF
+        expected = np.mean((np.sign(cc - CF) == dp)[moved])
+        assert res["sign_agreement_rate"] == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------

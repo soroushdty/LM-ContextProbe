@@ -15,7 +15,7 @@ import pandas as pd
 from scipy.stats import mannwhitneyu
 
 from shared.statistical.bootstrap import bootstrap_scalar
-from shared.statistical.delta import sign_agreement_mask
+from shared.statistical.delta import sign_agreement_cells, sign_agreement_mask
 
 
 def assign_test_strata(
@@ -63,7 +63,7 @@ def stratum_comparison(
     """Per-stratum sign agreement rate and Brier improvement with Mann-Whitney U.
 
     For each stratum (repeated / novel):
-      - sign_agree_rate: pooled over confirmatory-eligible classes, Δ_p ≠ 0 items only
+      - sign_agree_rate: pooled over confirmatory-eligible classes, on cells with Δ_p ≠ 0 and Δ_m ≠ 0
       - brier_improvement: mean(BS_cf - BS_ca) pooled over all classes
       - 95% patient-level bootstrap CI on each
 
@@ -109,11 +109,12 @@ def stratum_comparison(
         dp_elig = dp_s[:, eligible_cols]
         dm_elig = dm_s[:, eligible_cols]
         agree = sign_agreement_mask(dp_elig, dm_elig)
-        nz = dp_elig != 0.0
-        # Per-item: fraction of eligible-class positions that agree (among non-zero Δ_p)
+        nz = sign_agreement_cells(dp_elig, dm_elig)
+        # Per-item: fraction of eligible-class positions that agree (among cells
+        # where both Δ_p and Δ_m are non-zero; #36)
         nz_count = nz.sum(axis=1)
         agree_count = agree.sum(axis=1)
-        # Only include items that have at least one non-zero eligible-class delta
+        # Only include items that have at least one such cell
         has_nz = nz_count > 0
         sar_vals = np.where(has_nz, agree_count / np.maximum(nz_count, 1), float("nan"))
         sar_vals = sar_vals[has_nz]

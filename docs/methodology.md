@@ -92,13 +92,15 @@ Earlier versions numbered hypotheses per track, and the numbers clashed: Track 1
 | | Statistic | Uncertainty / test |
 |---|---|---|
 | **`context_sensitivity`** | Mean \|Δ_model\| and mean \|Δ_shuffled\| over all cells, overall and per category; their paired difference `|Δ_model| − |Δ_shuffled|` | Patient-cluster bootstrap 95% CIs; one-sided patient-cluster sign-flip test of the difference > 0 |
-| **`directional_alignment`** | On cells with Δ_ref ≠ 0: mean alignment `sign(Δ_ref)·Δ_model`, and sign-agreement rate `sign(Δ_model) = sign(Δ_ref)`; the same for Δ_shuffled | Patient-cluster bootstrap 95% CIs; one-sided permutation test of the sign-agreement rate against a null that shuffles each patient's model deltas among that patient's items |
+| **`directional_alignment`** | On cells with Δ_ref ≠ 0: mean alignment `sign(Δ_ref)·Δ_model`; on cells where Δ_model ≠ 0 too: sign-agreement rate `sign(Δ_model) = sign(Δ_ref)`; the same for Δ_shuffled | Patient-cluster bootstrap 95% CIs; one-sided permutation test of the sign-agreement rate against a null that shuffles each patient's model deltas among that patient's items |
 | **`class_correspondence`** | Pearson *r* between the per-category mean Δ_ref and mean Δ_model | One-sided permutation test over category labels |
 | **`context_specificity`** | On cells with Δ_ref ≠ 0: mean of `sign(Δ_ref)·(Δ_model − Δ_shuffled)` | Patient-cluster bootstrap 95% CI; one-sided patient-cluster sign-flip test |
 
 **Why the references.** Mean \|Δ_model\| is above zero for almost any model that reads its input, so a CI that excludes zero shows only that the prompt changed. The test is therefore whether the correct patient's context moves the scores more than another patient's does.
 
-A zero model delta counts as disagreement in the sign-agreement rate, so chance agreement is not 0.5: it depends on how often the model's score does not move and on which direction it tends to move in. The permutation null keeps both, because it moves each item's whole row of model deltas to another item of the same patient, and breaks only the match between the model's and the reference's shift on the same item. Its mean is reported as the chance agreement rate. Both endpoints also report the share of cells with a zero model delta (`zero_delta_rate`), and the post-hoc bundle reports the share below `epsilon` (`unchanged_rate_*`).
+The sign-agreement rate counts only cells where the model moved (Δ_model ≠ 0, or `|Δ_model| ≥ epsilon` in the post-hoc bundle). Models and reference observers both tend to move on the same items, the ambiguous ones whose score is not pinned near 0 or 1. When a zero model delta counted as disagreement, a model that moved exactly where the reference moved, in random directions, beat the permutation null below almost every time: in simulation with scores rounded to 0.05, the false-positive rate was 100% ([#36](https://github.com/soroushdty/LM-ContextProbe/issues/36)). How often the model does not move is reported separately: the share of Δ_ref ≠ 0 cells with a zero model delta (`zero_delta_rate`), or below `epsilon` in the bundle (`unchanged_rate_*`).
+
+Chance agreement is still not 0.5: it depends on which direction the model and the reference each tend to move in. The permutation null keeps that, because it moves each item's whole row of model deltas to another item of the same patient, and breaks only the match between the model's and the reference's shift on the same item. Its mean is reported as the chance agreement rate.
 
 ### Track 1 (`tracks/representation/statistical/`)
 
@@ -106,9 +108,9 @@ Confirmatory analyses are restricted to categories with at least `confirmatory_m
 
 | | Statistic | Uncertainty / test |
 |---|---|---|
-| **`directional_alignment`, per class** | Sign-agreement rate on cells with Δ_ref ≠ 0 | One-sided within-patient permutation test of the rate against its chance level (`perm_p`; the null mean is `null_rate`); Benjamini–Hochberg across eligible classes; patient-cluster bootstrap CI. The sign-flip test of rate > 0.5 (`cluster_p`) and the exact binomial p-value (`binom_p`) are kept for reference only |
-| **`directional_alignment`, pooled** | Sign-agreement rate pooled over eligible classes | Permutation test that shuffles model deltas among the items of the same patient (tests item-level specificity within patients); patient-cluster bootstrap CI |
-| **`directional_alignment`, across classes** | Mantel–Haenszel common odds ratio, stratified by class | One-sided within-patient permutation test of the odds ratio > 1 (`p_permutation`); the CMH p-value (`p_cmh`) and the sign-flip test of pooled agreement > 0.5 (`p_cluster`) are kept for reference only |
+| **`directional_alignment`, per class** | Sign-agreement rate on cells with Δ_ref ≠ 0 and Δ_model ≠ 0 (`n_moved`) | One-sided within-patient permutation test of the rate against its chance level (`perm_p`; the null mean is `null_rate`); Benjamini–Hochberg across eligible classes; patient-cluster bootstrap CI. The sign-flip test of rate > 0.5 (`cluster_p`) and the exact binomial p-value (`binom_p`) are kept for reference only |
+| **`directional_alignment`, pooled** | Sign-agreement rate pooled over eligible classes, on the same cells | Permutation test that shuffles model deltas among the items of the same patient (tests item-level specificity within patients); patient-cluster bootstrap CI |
+| **`directional_alignment`, across classes** | Mantel–Haenszel common odds ratio of model up vs down by reference up vs down, stratified by class; cells with Δ_model = 0 are left out | One-sided within-patient permutation test of the odds ratio > 1 (`p_permutation`); the CMH p-value (`p_cmh`) and the sign-flip test of pooled agreement > 0.5 (`p_cluster`) are kept for reference only |
 | **`brier_improvement`** | Per-class Brier improvement `Brier(context_free) − Brier(correct_context)` against correct-context labels | One-sided patient-cluster sign-flip test (`cluster_p`); Benjamini–Hochberg; patient-cluster bootstrap CI; macro summary. The Wilcoxon signed-rank p-value (`wilcoxon_p`) is kept for reference only |
 | **`context_specificity`** | Track 3's statistic (the same function, `context_specificity_test`): on cells with Δ_ref ≠ 0, mean of `sign(Δ_ref)·(Δ_model − Δ_shuffled)`, with both deltas from the leave-pair-out heads described below; pooled over eligible classes (confirmatory) and per class | One-sided patient-cluster sign-flip test; patient-cluster bootstrap CI; Benjamini–Hochberg across eligible classes for the per-class p-values |
 
@@ -133,7 +135,7 @@ The evaluation protocol (the endpoints, their statistics and tests, and the defa
 
 | Protocol | First release | Changes |
 |----------|---------------|---------|
-| 1 | 0.2.0 | First versioned protocol: the endpoints and tests described on this page, including the shuffled-context reference for `context_sensitivity`, the within-patient permutation null for `directional_alignment` ([#17](https://github.com/soroushdty/LM-ContextProbe/issues/17)), and Track 1's shuffled-context condition and `context_specificity` ([#11](https://github.com/soroushdty/LM-ContextProbe/issues/11)) |
+| 1 | 0.2.0 | First versioned protocol: the endpoints and tests described on this page, including the shuffled-context reference for `context_sensitivity`, the within-patient permutation null for `directional_alignment` ([#17](https://github.com/soroushdty/LM-ContextProbe/issues/17)), Track 1's shuffled-context condition and `context_specificity` ([#11](https://github.com/soroushdty/LM-ContextProbe/issues/11)), and sign agreement computed only on cells where the model moved ([#36](https://github.com/soroushdty/LM-ContextProbe/issues/36)) |
 
 ## Design decisions and what they guard against
 

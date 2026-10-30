@@ -14,7 +14,10 @@ in the same direction as the physicians?
 
 Directional alignment is evaluated via three independent inferences. All three are restricted to
 confirmatory-eligible classes (those with ≥ 15 non-zero physician deltas) and
-to items where the physician delta is non-zero (`Δ_p(i,c) ≠ 0`).
+to cells where both the physician and the model delta are non-zero (`Δ_p(i,c) ≠ 0` and
+`Δ_m(i,c) ≠ 0`, `shared.statistical.delta.sign_agreement_cells`). A zero model delta is left out
+rather than counted as disagreement: models and physicians both move on the same ambiguous
+items, so counting the model's zeros let random directions pass for alignment (#36).
 
 ### `h1_binomial_per_class`
 
@@ -34,9 +37,9 @@ h1_binomial_per_class(
 ```
 
 **Algorithm:**
-1. For each class `c`, restrict to rows where `Δ_p[:, c] ≠ 0`.
+1. For each class `c`, restrict to rows where `Δ_p[:, c] ≠ 0` and `Δ_m[:, c] ≠ 0`.
 2. Compute the sign agreement indicator: `sign(Δ_m(i,c)) == sign(Δ_p(i,c))`.
-3. Count agreements `k` out of `n_nz` non-zero items.
+3. Count agreements `k` out of the `n_moved` cells.
 4. Within-patient permutation test (confirmatory): shuffle the class's model deltas among
    each patient's items, keep the physician deltas in place, and recompute the rate.
    `null_rate` is the null mean (the chance agreement rate, which is not 0.5 when the model
@@ -53,7 +56,8 @@ h1_binomial_per_class(
 |---|---|---|
 | `Class` | str | Class name |
 | `n_nonzero` | int | Items with `Δ_p ≠ 0` for this class |
-| `sign_agree_rate` | float | Proportion of non-zero items where signs agree |
+| `n_moved` | int | Items with `Δ_p ≠ 0` and `Δ_m ≠ 0`, the cells the rate is computed on |
+| `sign_agree_rate` | float | Proportion of the `n_moved` cells where signs agree |
 | `ci_lower` | float | 95% bootstrap CI lower bound |
 | `ci_upper` | float | 95% bootstrap CI upper bound |
 | `null_rate` | float | Chance agreement rate (mean of the within-patient permutation null) |
@@ -128,10 +132,12 @@ For each confirmatory-eligible class, builds a 2×2 contingency table stratified
 physician-delta direction:
 
 ```
-                  Δ_m > 0    Δ_m ≤ 0
+                  Δ_m > 0    Δ_m < 0
    Δ_p > 0  →  [ a         b ]   (physician-positive items)
    Δ_p < 0  →  [ c         d ]   (physician-negative items)
 ```
+
+Cells with `Δ_m = 0` are left out (#36).
 
 Columns have a **consistent meaning across both rows** (model direction), which makes the
 common odds ratio interpretable: `OR = (a·d)/(b·c)`. When sign agreement exceeds 50%,

@@ -293,9 +293,11 @@ class ReportGenerator:
             "few patients all sign patterns are enumerated, so the smallest "
             "attainable p-value is 2^−(number of patients). Directional "
             "alignment is tested against a permutation null that shuffles each "
-            "patient's model deltas among that patient's items; because a zero "
-            "model delta counts as disagreement, chance agreement is this null's "
-            "mean, not 0.5.\n\n"
+            "patient's model deltas among that patient's items. Sign agreement "
+            "counts only cells where the model moved; how often it did not move "
+            "is reported separately. Chance agreement is this null's mean, not "
+            "0.5, because the model and the observers may each tend to move one "
+            "way.\n\n"
             "This report does **not** include Brier score, F1, AUROC, or any measure "
             "of prediction accuracy. The endpoints are context sensitivity, "
             "directional alignment, class-level correspondence, and correct-versus-"
@@ -376,7 +378,7 @@ class ReportGenerator:
             f"{_fmt(h2.get('sign_agreement_rate_shuffled'))}  ",
             f"- **Mean alignment, shuffled context:** "
             f"{_fmt(h2.get('mean_alignment_shuffled'))}  ",
-            f"- **Shift cells with zero model delta (counted as disagreement):** "
+            f"- **Shift cells with zero model delta (left out of sign agreement):** "
             f"correct {_fmt(h2.get('zero_delta_rate'))}, "
             f"shuffled {_fmt(h2.get('zero_delta_rate_shuffled'))}\n",
             "#### Per-Category Sign Agreement Rate\n",

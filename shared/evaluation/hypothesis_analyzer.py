@@ -42,6 +42,11 @@ from shared.statistical.cluster_tests import (
     cluster_sign_flip_test,
     within_cluster_permutation_test,
 )
+from shared.statistical.delta import (
+    sign_agreement_cells,
+    sign_agreement_mask,
+    sign_agreement_rate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -576,11 +581,16 @@ class HypothesisAnalyzer:
         """Compute H2: mean alignment and sign agreement rate, against chance.
 
         Restricted to cells where ``delta_physician`` (delta_reference) != 0.
-        A zero model delta counts as disagreement, so chance agreement is not
-        0.5. The reference is a permutation null that shuffles each patient's
-        model delta rows among that patient's items, which keeps the
-        model's overall tendencies (how often it moves, and in which
-        direction) and breaks only the item-level match.
+        The sign-agreement rate also leaves out cells where the model did not
+        move (Δ_model = 0; see ``shared.statistical.delta.sign_agreement_cells``):
+        counting them as disagreement made a model that moves where the
+        reference moves, in random directions, look aligned (#36). How often
+        the model does not move is reported as ``zero_delta_rate``. Chance
+        agreement is still not 0.5, because the model and the reference may
+        each tend to move one way. The reference is a permutation null that
+        shuffles each patient's model delta rows among that patient's items,
+        which keeps the model's overall tendencies and breaks only the
+        item-level match.
 
         Parameters
         ----------
@@ -603,7 +613,8 @@ class HypothesisAnalyzer:
             - ``mean_alignment`` (float)
             - ``ci_lower_alignment`` (float)
             - ``ci_upper_alignment`` (float)
-            - ``sign_agreement_rate`` (float)
+            - ``sign_agreement_rate`` (float): on cells where both
+              Δ_reference and Δ_model are non-zero
             - ``ci_lower_sign_agree`` (float)
             - ``ci_upper_sign_agree`` (float)
             - ``null_sign_agreement_rate`` (float): mean of the permutation
@@ -611,7 +622,7 @@ class HypothesisAnalyzer:
             - ``p_value`` (float): one-sided permutation p-value for
               ``sign_agreement_rate`` above the null
             - ``zero_delta_rate`` (float): fraction of the cells with
-              Δ_model = 0
+              Δ_model = 0, which the sign-agreement rate leaves out
             - ``sign_agreement_rate_shuffled``, ``mean_alignment_shuffled``,
               ``zero_delta_rate_shuffled``: the same quantities for
               Δ_shuffled (NaN without shuffled scores)
@@ -652,10 +663,12 @@ class HypothesisAnalyzer:
         alignment_2d = np.sign(delta_physician) * delta_llm_correct  # (N, 10)
         alignment_nz = alignment_2d[nonzero_mask]  # (M,)
 
-        sign_agree_2d = (
-            np.sign(delta_physician) == np.sign(delta_llm_correct)
-        ).astype(float)  # (N, 10)
-        sign_agree_nz = sign_agree_2d[nonzero_mask]  # (M,)
+        # Sign agreement: only cells where the model moved too (#36).
+        moved_mask = sign_agreement_cells(delta_physician, delta_llm_correct)  # (N, D)
+        sign_agree_nz = sign_agreement_mask(
+            delta_physician, delta_llm_correct
+        )[moved_mask].astype(float)  # (K,)
+        patient_ids_moved = patient_ids_2d[moved_mask]  # (K,)
 
         # --- Mean alignment ---
         mean_align = float(np.mean(alignment_nz))
@@ -674,26 +687,29 @@ class HypothesisAnalyzer:
         )
 
         # --- Sign agreement rate ---
-        sign_agree_rate = float(np.mean(sign_agree_nz))
+        sign_agree_rate = sign_agreement_rate(delta_physician, delta_llm_correct)
 
         rng_sign = np.random.default_rng(self._bootstrap_seed + 1)
 
         def _sign_stat(idx: np.ndarray) -> float:
             return float(np.mean(sign_agree_nz[idx]))
 
-        ci_lo_sign, ci_hi_sign = patient_cluster_bootstrap(
-            statistic_fn=_sign_stat,
-            data=sign_agree_nz,
-            patient_ids=patient_ids_nz,
-            n_resamples=self._n_bootstrap,
-            rng=rng_sign,
-        )
+        if sign_agree_nz.size:
+            ci_lo_sign, ci_hi_sign = patient_cluster_bootstrap(
+                statistic_fn=_sign_stat,
+                data=sign_agree_nz,
+                patient_ids=patient_ids_moved,
+                n_resamples=self._n_bootstrap,
+                rng=rng_sign,
+            )
+        else:
+            ci_lo_sign = ci_hi_sign = float("nan")
 
         # --- Permutation null: model rows shuffled within patient ---
         sign_dp = np.sign(delta_physician)
 
         def _agree_rate(delta_model: np.ndarray) -> float:
-            return float(np.mean((sign_dp == np.sign(delta_model))[nonzero_mask]))
+            return sign_agreement_rate(delta_physician, delta_model)
 
         null = within_cluster_permutation_test(
             _agree_rate,
@@ -713,7 +729,7 @@ class HypothesisAnalyzer:
             if np.any(nz_s):
                 dp_s = sign_dp[rows][nz_s]
                 ds = delta_shuffled[nz_s]
-                sign_agree_shuffled = float(np.mean(dp_s == np.sign(ds)))
+                sign_agree_shuffled = sign_agreement_rate(dp_s, ds)
                 mean_align_shuffled = float(np.mean(dp_s * ds))
                 zero_shuffled = float(np.mean(ds == 0.0))
 

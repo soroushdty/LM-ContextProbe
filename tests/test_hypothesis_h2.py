@@ -81,12 +81,13 @@ class TestComputeH2:
         assert agg["mean_alignment_correct"] > agg["mean_alignment_shuffled"]
 
     def test_epsilon_threshold_zeroes_small_delta(self):
-        """LLM delta below epsilon treated as zero → sign agreement = 0 when physician shifts."""
-        # delta_correct = 0.005 < epsilon=0.01 → treated as zero, sign=0 ≠ sign(dp)=1
+        """LLM delta below epsilon counts as unchanged and is left out of sign agreement (#36)."""
+        # delta_correct = 0.005 < epsilon=0.01 → unchanged; no cell left to agree or disagree
         cells = _make_cells(delta_physician=0.3, delta_correct=0.005)
         h2 = compute_h2(cells, "m", CATS, epsilon=0.01, n_bootstrap=50, seed=0)
         agg = h2[h2["category"] == "aggregate"].iloc[0]
-        assert agg["sign_agreement_correct"] == pytest.approx(0.0)
+        assert agg["unchanged_rate_correct"] == pytest.approx(1.0)
+        assert math.isnan(agg["sign_agreement_correct"])
 
     def test_ci_keys_present(self):
         cells = _make_cells()
