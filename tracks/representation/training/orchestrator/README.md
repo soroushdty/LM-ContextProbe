@@ -83,6 +83,7 @@ def train_ensemble_pipeline(
    - Compute diagnostic Stage 1 test-vs-survey metrics (`test_stage1_vs_survey_metrics.csv`) using the averaged context-free per-fold predictions (transductive — explicitly logged as diagnostic).
    - Generate ROC/PR figures for both train OOF and test.
    - When Stage 2 is active, compute fold-pure and transductive Stage 2 metrics against both interview and survey labels (interview is the primary Stage 2 target; survey is diagnostic).
+   - When Stage 2 is active, run the shuffled-context control (`_leave_pair_out_context_swap`): pair the test patients (`stage2.stage2_context.pair_patients_for_context_swap`, seeded by `shuffled_context_seed`), fit one Stage 2 head per pair without either patient, and score each patient's items with its own and its partner's context vector.
    - Assemble the `arch_predictions` dict (fold-pure across architectures) for downstream statistical comparison.
 
 ### Output artifacts
@@ -100,6 +101,7 @@ Inside `ensemble_root` (default `./output/model`):
 | `test_stage2_fold_pure_vs_interview_metrics.csv`| Primary Stage 2 metrics (fold-pure vs interview)                  |
 | `test_stage2_fold_pure_vs_survey_metrics.csv`   | Diagnostic Stage 2 metrics (fold-pure vs survey)                  |
 | `test_stage2_transductive_avg_vs_*_metrics.csv` | Diagnostic transductive averaged Stage 2 metrics                  |
+| `test_shuffled_context_map.csv`                 | Each test row's patient and the partner whose context it was given in the shuffled-context condition |
 | `*.meta.json`                                   | Sidecar metadata for every metrics CSV (label source, prediction source, thresholding mode, n_patients, n_folds, ...) |
 | `fold_{i+1}_hp_search.csv`                      | HP grid scan diagnostics (when `log_hp_search_grid=True`)         |
 | `fold_{i+1}_epoch_curve.csv`                    | Per-epoch loss / val score / patience trace                       |
@@ -124,6 +126,9 @@ Inside `ensemble_root` (default `./output/model`):
 | `test_probs_ca`                | `(n_test, n_classes)`                 | Stage 2 context-aware test predictions (or Stage 1 if no Stage 2) |
 | `test_probs_ca_fold_pure`      | `(n_test, n_classes)` or None         | Clean fold-pure Stage 2 predictions                               |
 | `test_probs_ca_transductive`   | `(n_test, n_classes)` or None         | Diagnostic transductive Stage 2 predictions                       |
+| `test_probs_ca_leave_pair_out` | `(n_test, n_classes)` or None         | Leave-pair-out Stage 2 predictions with the row's own context      |
+| `test_probs_shuffled_leave_pair_out` | `(n_test, n_classes)` or None   | The same heads with the swap partner's context                     |
+| `shuffled_context_donors`      | `(n_test,)` int or None               | Swap partner of each test row (-1 if not scored)                   |
 | `avg_thresh_f1opt`             | `(n_classes,)`                        | Mean inner-fold thresholds                                        |
 | `arch_predictions`             | `{arch_name: (n_test, n_classes)}` or None | Fold-pure predictions for every fusion architecture / baseline  |
 | `oof_strata`                   | `(n_train,) of object` or absent      | Fold-local `"repeated"` / `"novel"` stratum labels (only when `item_strings_train` is provided) |

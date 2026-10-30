@@ -52,6 +52,10 @@ activation: gelu
 # CORE TRAINING
 # =============================================================================
 global_seed: 42
+# Seed for the shuffled-context control (context_specificity): test patients
+# are paired at random, and a Stage 2 head fitted without both scores each
+# patient with its own and its partner's context.
+shuffled_context_seed: 123
 num_epochs: 50
 
 # =============================================================================

@@ -23,6 +23,8 @@ _OUTPUTS = {
     "directional_alignment_per_class.csv": "Directional alignment (formerly H1) per class",
     "directional_alignment_pooled.json":   "Directional alignment pooled over classes (permutation test)",
     "directional_alignment_cmh.json":      "Directional alignment across classes (CMH, permutation p-value)",
+    "context_specificity_pooled.json":     "Context specificity pooled over classes (correct vs shuffled context)",
+    "context_specificity_per_class.csv":   "Context specificity per class",
     "brier_improvement_per_class.csv":     "Brier improvement (formerly H2) per class",
     "brier_improvement_summary.json":      "Brier improvement macro-average summary",
     "wasserstein_distance.csv":            "Per-class Wasserstein distance to the label distribution",
@@ -260,6 +262,8 @@ def run_statistical_analysis(
     item_texts_train: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
     X_items_test: np.ndarray | None = None,
+    y_hat_ca_leave_pair_out: np.ndarray | None = None,
+    y_hat_shuffled: np.ndarray | None = None,
 ) -> None:
     """Run all statistical analyses and save outputs to output_dir.
 
@@ -268,6 +272,11 @@ def run_statistical_analysis(
         y_interview:        (n_pairs, n_classes) pair-aggregated interview labels.
         y_hat_cf:           (n_pairs, n_classes) context-free predictions (Stage 1 only).
         y_hat_ca:           (n_pairs, n_classes) context-aware predictions (Stage 2).
+        y_hat_ca_leave_pair_out, y_hat_shuffled:
+                            (n_pairs, n_classes) predictions of the leave-pair-out
+                            Stage 2 heads with the row's own context and with its
+                            swap partner's. Context specificity compares the two;
+                            it is skipped if either is None.
         patient_ids:        (n_pairs,) patient IDs.
         item_texts:         (n_pairs,) item text strings.
         class_list:         Class names, length n_classes.
@@ -308,6 +317,9 @@ def run_statistical_analysis(
     # alignment, so they leave the sign-flip draws (used by Brier
     # improvement) unchanged.
     null_rng = np.random.default_rng(int(cfg.get("global_seed", 42)) + 2)
+    # And one for context specificity, so adding it leaves every other
+    # output unchanged.
+    spec_rng = np.random.default_rng(int(cfg.get("global_seed", 42)) + 3)
     fig_dpi = int(stat_cfg.get("figure_dpi", 150))
 
     patient_col = cfg.get("patient_col", "Patient")
@@ -429,6 +441,35 @@ def run_statistical_analysis(
         "Directional alignment CMH: OR=%.3f, p=%.4f, permutation p=%.4f",
         h1_cmh["common_odds_ratio"], h1_cmh["p_cmh"], h1_cmh["p_permutation"],
     )
+
+    # ------------------------------------------------------------------
+    # Step 6.5 — Context specificity (correct vs shuffled context)
+    # ------------------------------------------------------------------
+    if y_hat_ca_leave_pair_out is not None and y_hat_shuffled is not None:
+        from ..hypotheses.context_specificity import (
+            context_specificity_per_class,
+            context_specificity_pooled,
+        )
+        # Both conditions come from the same leave-pair-out head, not from the
+        # fold-pure head behind delta_m (see docs/methodology.md).
+        delta_m_pair = compute_model_deltas(y_hat_cf, y_hat_ca_leave_pair_out)
+        delta_s = compute_model_deltas(y_hat_cf, y_hat_shuffled)
+        spec_pooled = context_specificity_pooled(
+            delta_p, delta_m_pair, delta_s, patient_ids, eligible_classes, class_list,
+            n_resamples=n_resamples, n_permutations=n_permutations, rng=spec_rng,
+        )
+        _save_json(output_dir / "context_specificity_pooled.json", spec_pooled)
+        spec_df = context_specificity_per_class(
+            delta_p, delta_m_pair, delta_s, patient_ids, class_list, eligible_classes,
+            n_resamples=n_resamples, n_permutations=n_permutations, rng=spec_rng,
+        )
+        _save_csv(output_dir / "context_specificity_per_class.csv", spec_df)
+        logger.info(
+            "Context specificity pooled: alignment difference=%.4f, p=%.4f",
+            spec_pooled["mean_alignment_difference"], spec_pooled["p_value"],
+        )
+    else:
+        logger.info("Context specificity skipped: no shuffled-context predictions.")
 
     # ------------------------------------------------------------------
     # Step 7 — Brier improvement (H2)

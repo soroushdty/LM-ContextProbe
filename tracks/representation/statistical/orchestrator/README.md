@@ -42,6 +42,8 @@ run_statistical_analysis(
     item_texts_train: np.ndarray | None = None, # Training item strings for strata assignment
     rng: np.random.Generator | None = None,
     X_items_test: np.ndarray | None = None,    # (n_pairs, d) item embeddings for ablation
+    y_hat_ca_leave_pair_out: np.ndarray | None = None,  # (n_pairs, n_classes) leave-pair-out head, own context
+    y_hat_shuffled: np.ndarray | None = None,  # (n_pairs, n_classes) same head, swap partner's context
 ) -> None
 ```
 
@@ -121,6 +123,19 @@ patient's model delta rows are shuffled among that patient's items). `p_cmh` tre
 tests pooled sign agreement > 0.5; both are kept for reference only.
 
 **Output:** `directional_alignment_cmh.json`
+
+### Step 6.5 — Context specificity (correct vs shuffled context)
+
+Runs if `y_hat_ca_leave_pair_out` and `y_hat_shuffled` are provided (the pipeline's `test_probs_ca_leave_pair_out`
+and `test_probs_shuffled_leave_pair_out`; `Δ_m` here comes from these, not from `y_hat_ca`). Calls
+`tracks.representation.statistical.hypotheses.context_specificity`, which uses the same statistic as Track 3
+(`shared.evaluation.hypothesis_analyzer.context_specificity_test`): on cells with a non-zero physician delta, the mean
+of `sign(Δ_p)·(Δ_m − Δ_shuffled)`, with a patient-cluster bootstrap CI and a one-sided patient-cluster sign-flip
+test. The pooled result over confirmatory-eligible classes is confirmatory; the per-class p-values get BH correction
+across eligible classes. Rows with a missing prediction are left out. Uses its own generator (`global_seed + 3`), so
+the other outputs are unchanged.
+
+**Outputs:** `context_specificity_pooled.json`, `context_specificity_per_class.csv`
 
 ### Step 7 — Brier improvement per class and macro summary (formerly H2)
 
@@ -208,6 +223,8 @@ failure does not abort the pipeline.
 | `directional_alignment_per_class.csv` | Directional alignment (formerly H1): sign agreement per class, BH-adjusted p |
 | `directional_alignment_pooled.json` | Directional alignment pooled over classes: permutation test |
 | `directional_alignment_cmh.json` | Directional alignment across classes: CMH common odds ratio and cluster p |
+| `context_specificity_pooled.json` | Context specificity pooled over eligible classes: correct vs shuffled alignment, CI, sign-flip p |
+| `context_specificity_per_class.csv` | Context specificity per class, BH-adjusted p |
 | `brier_improvement_per_class.csv` | Brier improvement (formerly H2) per class |
 | `brier_improvement_summary.json` | Brier improvement macro-average summary |
 | `wasserstein_distance.csv` | Wasserstein-1 distance per class (descriptive) |

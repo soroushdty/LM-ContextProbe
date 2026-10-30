@@ -199,6 +199,8 @@ class ExistingEnsembleTrainingStrategy:
                 ensemble_bundle_path=model_dir / "ensemble_bundle.joblib",
                 arch_predictions=result.get("arch_predictions"),
                 X_items_test=dataset.X_test,
+                y_hat_ca_leave_pair_out=result.get("test_probs_ca_leave_pair_out"),
+                y_hat_shuffled=result.get("test_probs_shuffled_leave_pair_out"),
             )
             logger.info("Statistical analysis complete. Outputs at: %s", output_dir)
         except Exception:

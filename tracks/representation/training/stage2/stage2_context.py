@@ -81,6 +81,34 @@ def build_context_vectors(
     return result
 
 
+def pair_patients_for_context_swap(patient_ids, seed: int) -> list[list[int]]:
+    """Group patients for the shuffled-context control, which swaps contexts within a group.
+
+    Patients are shuffled with ``seed`` and dealt into pairs; with an odd
+    number, the last group has three. Within a group, each patient is given
+    the next patient's context (the last is given the first's), so no
+    patient gets its own. Track 1 fits one Stage 2 head per group without any
+    of the group's patients, so the head has seen neither the patient's own
+    context nor the one it is swapped for.
+
+    Args:
+        patient_ids: Patients to group (duplicates are ignored).
+        seed:        Seed for the grouping (``shuffled_context_seed``).
+
+    Returns:
+        Groups of patient IDs, each of length 2 or 3. Empty with fewer than
+        two patients.
+    """
+    pool = np.array(sorted({int(float(p)) for p in patient_ids}), dtype=int)
+    if pool.size < 2:
+        return []
+    order = np.random.default_rng(seed).permutation(pool).tolist()
+    groups = [order[i:i + 2] for i in range(0, len(order) - len(order) % 2, 2)]
+    if len(order) % 2:
+        groups[-1].append(order[-1])
+    return groups
+
+
 def _build_2d_fusion(e_i: np.ndarray, c_p: np.ndarray) -> np.ndarray:
     return np.concatenate([e_i, c_p])
 
