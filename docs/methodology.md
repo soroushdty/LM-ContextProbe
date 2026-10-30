@@ -163,5 +163,5 @@ Results are claims about **the patients and reference observers in the evaluated
 These are known gaps between the intended design and the current code.
 
 - **`class_correspondence` is a correlation over the number of categories** (ten by default), so it has little power and is best read descriptively.
-- **No simulation-based validation yet.** The false-positive rate and power of the endpoints under known effects have not been measured. ([#18](https://github.com/soroushdty/LM-ContextProbe/issues/18))
+- **Small studies.** In simulation ([`simulation.md`](simulation.md)), every confirmatory test keeps its false-positive rate, but with 6–10 patients the 95% patient-cluster CIs cover only about 87–92%, and the per-class tests (Benjamini–Hochberg across classes) need about four times as many patients as the pooled ones for the same power. `context_sensitivity`'s power has not been simulated.
 - **One dataset format so far** (the paired-context workbook; [#6](https://github.com/soroushdty/LM-ContextProbe/issues/6)). The label taxonomy is configurable ([`docs/adapters.md`](adapters.md#label-space-sharedlabel_spacepy)).
