@@ -84,6 +84,8 @@ class TestGenerator:
             SimulationDesign(scenario="null")
         with pytest.raises(ValueError, match="two patients"):
             SimulationDesign(n_patients=1)
+        with pytest.raises(ValueError, match=r"effect in \[0, 1\]"):
+            SimulationDesign(scenario="attenuated", effect=1.5)
 
     def test_reference_is_mostly_unchanged_and_mostly_up(self):
         dp = _big("unrelated").delta_reference
@@ -121,8 +123,20 @@ class TestPlantedEffects:
         assert _agreement(dp[:, :half], dm[:, :half]) > 0.55
         assert _agreement(dp[:, half:], dm[:, half:]) < 0.45
 
+    def test_attenuated_moves_less_with_another_patients_context(self):
+        st = _big("attenuated", effect=0.5)
+        dp, dm, ds = _deltas(st)
+        assert np.mean(np.abs(dm)) > 1.3 * np.mean(np.abs(ds))
+        # Directions stay unrelated to the reference.
+        assert _agreement(dp, dm) == pytest.approx(0.5, abs=0.02)
+        assert abs(_specificity(st)) < 0.003
+
+    def test_attenuated_with_no_effect_is_unrelated(self):
+        a, b = _big("attenuated", effect=0.0), _big("unrelated")
+        np.testing.assert_array_equal(a.shuffled_context_scores, b.shuffled_context_scores)
+
     def test_scenario_names(self):
-        assert SCENARIOS == ("unrelated", "aligned", "nonspecific", "partial")
+        assert SCENARIOS == ("unrelated", "aligned", "nonspecific", "partial", "attenuated")
 
 
 # ---------------------------------------------------------------------------
@@ -156,20 +170,21 @@ class TestRunner:
         out = tmp_path / "sim"
         code = se.main([
             "--out", str(out), "--patients", "4", "--items", "6", "--effects", "1.0",
-            "--clustering-sds", "2.0", "--reps-null", "2", "--reps", "1",
+            "--clustering-sds", "2.0", "--attenuations", "0.5", "--reps-null", "2", "--reps", "1",
             "--n-bootstrap", "20", "--n-permutations", "40", "--workers", "1",
         ])
         assert code == 0
         rej = pd.read_csv(out / "rejection_rates.csv", keep_default_na=False)
-        assert set(rej["scenario"]) == {"unrelated", "aligned", "nonspecific", "partial"}
+        assert set(rej["scenario"]) == {"unrelated", "aligned", "nonspecific", "partial", "attenuated"}
         assert set(rej["model_patient_sd"]) == {0.3, 2.0}
+        assert set(rej.loc[rej["scenario"] == "attenuated", "effect"]) == {0.5}
         cov = pd.read_csv(out / "ci_coverage.csv", keep_default_na=False)
         assert set(cov["method"]) == {"patient_cluster", "item_level"}
         design = json.loads((out / "design.json").read_text())
         assert design["seed"] == 2026
         assert {p.name for p in (out / "figures").iterdir()} == {
             "false_positive_rate.png", "power_aligned.png", "power_nonspecific.png",
-            "power_partial.png", "ci_coverage.png", "clustering.png",
+            "power_partial.png", "power_attenuated.png", "ci_coverage.png", "clustering.png",
         }
 
     def test_same_seed_same_replicates(self, tmp_path):

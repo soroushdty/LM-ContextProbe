@@ -44,6 +44,9 @@ h1_binomial_per_class(
    each patient's items, keep the physician deltas in place, and recompute the rate.
    `null_rate` is the null mean (the chance agreement rate, which is not 0.5 when the model
    and the physicians shift mostly in one direction) and `perm_p` the one-sided p-value.
+   The observed and permuted rates are compared as `(rate − null_rate) · sqrt(n_moved)`,
+   with each replicate's own `n_moved`: permuted model deltas land on fewer moved cells,
+   and the raw rate's null was too wide (#39).
 5. For reference only: the patient-cluster sign-flip test of agreement > 0.5 (`cluster_p`)
    and `scipy.stats.binomtest(k, n_nz, p=0.5, alternative="greater")` (`binom_p`).
 6. Compute a 95% patient-level bootstrap CI on the agreement rate via `bootstrap_rate()`.
@@ -88,13 +91,15 @@ h1_permutation_test(
 
 **Algorithm:**
 1. If `eligible_classes` is provided, restrict to those columns.
-2. Pool all (item, class) pairs with `Δ_p ≠ 0` across eligible classes; compute the
-   observed aggregate sign agreement rate.
+2. Pool all (item, class) pairs with `Δ_p ≠ 0` and `Δ_m ≠ 0` across eligible classes;
+   compute the observed aggregate sign agreement rate.
 3. For each of `n_permutations` replicates: permute the **row ordering** of `delta_m`
    within each patient block. This preserves within-patient correlation (all class
    columns for a patient's item shuffle together) while destroying the model–physician
    directional relationship. Compute the permuted aggregate rate.
-4. P-value: `mean(null_vals >= observed)` (one-sided, upper tail).
+4. P-value (`within_cluster_permutation_test`, one-sided, upper tail):
+   `(1 + #{null >= observed}) / (n_permutations + 1)`, comparing
+   `(rate − null_mean) · sqrt(number of moved cells)` as in the per-class test (#39).
 5. Compute a 95% patient-level bootstrap CI on the observed rate.
 6. If all physician deltas are zero (observed = NaN), the permutation loop is skipped
    and all values are returned as NaN to avoid spurious `mean of empty slice` warnings.

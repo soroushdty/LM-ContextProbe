@@ -383,9 +383,12 @@ def _sign_agreement_null(
     sign_dp = np.sign(dp)
     shift = (dp != 0.0) & ~np.isnan(dp)
 
-    def _rate(dm_: np.ndarray) -> float:
+    def _valid(dm_: np.ndarray) -> np.ndarray:
         # Cells where the LLM did not move (or is missing) do not count (#36).
-        valid = shift & ~np.isnan(dm_) & (dm_ != 0.0)
+        return shift & ~np.isnan(dm_) & (dm_ != 0.0)
+
+    def _rate(dm_: np.ndarray) -> float:
+        valid = _valid(dm_)
         if not np.any(valid):
             return float("nan")
         return float(np.mean((np.sign(dm_) == sign_dp)[valid]))
@@ -393,6 +396,7 @@ def _sign_agreement_null(
     return within_cluster_permutation_test(
         _rate, dm, pids, n_permutations=n_permutations,
         rng=np.random.default_rng(seed),
+        size_fn=lambda dm_: float(_valid(dm_).sum()),
     )
 
 

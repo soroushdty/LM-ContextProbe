@@ -49,6 +49,12 @@ redrawn for another patient's context.  Scenarios differ only in
 ``partial``
     As ``aligned`` with the sign of the effect reversed in the second half
     of the categories.
+``attenuated``
+    As ``unrelated`` given the patient's own context; given another
+    patient's context the whole shift is multiplied by ``1 - effect``
+    (``effect`` in [0, 1]).  The correct context moves the scores further,
+    so ``context_sensitivity`` should reject; the directions are unrelated
+    to the reference, so every other endpoint is null (#40).
 """
 from __future__ import annotations
 
@@ -56,7 +62,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-SCENARIOS = ("unrelated", "aligned", "nonspecific", "partial")
+SCENARIOS = ("unrelated", "aligned", "nonspecific", "partial", "attenuated")
 
 
 @dataclass(frozen=True)
@@ -93,6 +99,8 @@ class SimulationDesign:
             raise ValueError(f"Unknown scenario {self.scenario!r}; expected one of {SCENARIOS}.")
         if self.n_patients < 2:
             raise ValueError("A shuffled context needs at least two patients.")
+        if self.scenario == "attenuated" and not 0.0 <= self.effect <= 1.0:
+            raise ValueError("The attenuated scenario needs an effect in [0, 1].")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -164,8 +172,10 @@ def simulate_study(design: SimulationDesign, rng: np.random.Generator) -> Simula
     if d.scenario == "partial":
         sign[C // 2:] = -1.0
 
-    def _model_shift(context_ids: np.ndarray, implied: np.ndarray) -> np.ndarray:
+    def _model_shift(context_ids: np.ndarray, implied: np.ndarray, shuffled: bool = False) -> np.ndarray:
         base = m[context_ids] + rng.normal(0.0, d.model_noise_sd, size=(n, C))
+        if d.scenario == "attenuated" and shuffled:
+            return (1.0 - d.effect) * base
         if d.scenario in ("aligned", "partial"):
             return base + d.effect * sign * implied
         if d.scenario == "nonspecific":
@@ -175,7 +185,7 @@ def simulate_study(design: SimulationDesign, rng: np.random.Generator) -> Simula
     model_cf_logit = a + rng.normal(0.0, d.model_cf_sd, size=(n, C))
     cf = _round(_sigmoid(model_cf_logit), d.score_round)
     cc = _round(_sigmoid(model_cf_logit + _model_shift(pids, implied_correct)), d.score_round)
-    sh = _round(_sigmoid(model_cf_logit + _model_shift(donors, implied_shuffled)), d.score_round)
+    sh = _round(_sigmoid(model_cf_logit + _model_shift(donors, implied_shuffled, shuffled=True)), d.score_round)
 
     return SimulatedStudy(
         patient_ids=pids,

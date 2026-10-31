@@ -4,6 +4,14 @@
 
 The first archived release (Zenodo DOI). Endpoints and tests are **protocol v1**.
 
+- **`directional_alignment`'s permutation tests are studentized by the number of moved cells** (#39). Since #36 the sign-agreement rate counts only cells where both the reference and the model moved. Models move most where the reference moves, so a permuted model row lands on fewer counted cells and the null distribution of the raw rate was too wide. In simulation with scores rounded to 0.05 the tests rejected in 1.6–2.8% of null replicates at α = 0.05 (Track 1 per class: 0.4–1.4%).
+  - `within_cluster_permutation_test` takes `size_fn` and compares `(rate − null mean) · √K` with each replicate's own K. It is used by Track 3's `compute_h2`, the post-hoc bundle, and Track 1's per-class and pooled tests. Track 1's pooled test now calls the shared function instead of its own loop, which adds the usual +1 to its p-value.
+  - In simulation the false-positive rate is 3.6–5.2% (per class 1.8–4.0%), and power rises: Track 3 with 10 patients at *d* = 0.25 from 0.62 to 0.74; Track 1 per class with 20 patients at *d* = 0.5 from 0.66 to 0.88. With continuous scores the p-values are unchanged. The CMH odds-ratio test is not studentized.
+  - The permutation result also reports `null_std`.
+  - **Changes reported p-values** whenever model deltas can be exactly zero. Protocol v1 is not yet released, so it stays v1.
+
+- **Simulated power of `context_sensitivity`** (#40). A new `attenuated` scenario in `shared/simulation` shrinks the model's shift with another patient's context by a fraction *a* (`--attenuations`, default 0.05, 0.1, 0.25, 1.0; the designs come last, so all earlier designs keep their replicates). Power is ≥ 0.96 from *a* = 0.25 and ≥ 0.85 at *a* = 0.1 with 20 patients. The scenario also showed that `context_specificity` responds to how much the correct context moves the scores, not only to its direction (#42).
+
 - **Simulation study of the endpoints** (#18). `shared/simulation/` generates paired-context studies with planted effects (model shifts unrelated to the reference, aligned with it, aligned but non-specific to the patient, or aligned in only half the categories), with rounded LLM-like scores. `scripts/simulate_endpoints.py` runs every Track 3 and Track 1 endpoint test on them and reports false-positive rates, power curves, and the coverage of patient-cluster vs item-level bootstrap CIs. Results, figures and the summary tables are in `docs/simulation.md` and `docs/simulation/`.
   - Every confirmatory test keeps its nominal false-positive rate (at most 7.0% at α = 0.05 over 500 replicates per design); the reference tests that treat cells as independent or compare with 0.5 do not (up to 54% with strong patient effects).
   - `context_specificity` separates a model that uses the patient's context from one that shifts the same way under any context; directional alignment cannot.
