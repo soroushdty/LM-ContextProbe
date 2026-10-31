@@ -4,6 +4,12 @@
 
 The first archived release (Zenodo DOI). Endpoints and tests are **protocol v1**.
 
+- **Simulation study of the endpoints** (#18). `shared/simulation/` generates paired-context studies with planted effects (model shifts unrelated to the reference, aligned with it, aligned but non-specific to the patient, or aligned in only half the categories), with rounded LLM-like scores. `scripts/simulate_endpoints.py` runs every Track 3 and Track 1 endpoint test on them and reports false-positive rates, power curves, and the coverage of patient-cluster vs item-level bootstrap CIs. Results, figures and the summary tables are in `docs/simulation.md` and `docs/simulation/`.
+  - Every confirmatory test keeps its nominal false-positive rate (at most 7.0% at α = 0.05 over 500 replicates per design); the reference tests that treat cells as independent or compare with 0.5 do not (up to 54% with strong patient effects).
+  - `context_specificity` separates a model that uses the patient's context from one that shifts the same way under any context; directional alignment cannot.
+  - With 6–10 patients, 95% patient-cluster CIs cover about 87–92%.
+  - The study found #36.
+
 - **`directional_alignment` no longer counts a zero model delta as disagreement** (#36). Models and physicians both tend to move on the same ambiguous items, so a model that moved exactly where the physicians moved, in random directions, beat the within-patient permutation null almost every time. In simulation with scores rounded to 0.05 (as LLM outputs are), Track 3's confirmatory test and Track 1's pooled and per-class tests had a false-positive rate of 100%; with the fix it was 1%. Found by the simulation study (#18).
   - Sign-agreement rates, their CIs, their permutation nulls and the reference tests against 0.5 are now computed on cells where both the reference and the model moved (`shared.statistical.delta.sign_agreement_cells`). In the post-hoc bundle a model delta below `epsilon` is left out the same way.
   - Track 1's CMH tables compare model up with model down; `Δ_m = 0` used to be counted as down.

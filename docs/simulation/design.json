@@ -1,0 +1,74 @@
+{
+  "seed": 2026,
+  "alpha": 0.05,
+  "n_bootstrap": 500,
+  "n_permutations": 1000,
+  "reps_null": 500,
+  "reps": 200,
+  "patients": [
+    6,
+    10,
+    20,
+    40
+  ],
+  "items_per_patient": [
+    10,
+    30
+  ],
+  "effects": [
+    0.25,
+    0.5,
+    1.0
+  ],
+  "base_design": {
+    "scenario": "unrelated",
+    "effect": 0.0,
+    "n_patients": 10,
+    "items_per_patient": 20,
+    "n_categories": 10,
+    "n_observers": 2,
+    "base_logit_mean": -2.0,
+    "base_logit_sd": 3.0,
+    "shift_mean": 0.5,
+    "shift_category_sd": 0.5,
+    "patient_sd": 0.7,
+    "item_sd": 0.7,
+    "interaction_sd": 0.7,
+    "observer_sd": 0.5,
+    "category_seed": 0,
+    "model_cf_sd": 0.5,
+    "model_patient_sd": 0.3,
+    "model_noise_sd": 0.5,
+    "score_round": 0.05
+  },
+  "clustering_sds": [
+    1.0,
+    2.0
+  ],
+  "population_values": {
+    "unrelated|0.0|0.3|context_specificity_difference": 0.0,
+    "unrelated|0.0|0.3|context_sensitivity_difference": 0.0,
+    "aligned|0.25|0.3|context_specificity_difference": 0.016046611308473003,
+    "aligned|0.25|0.3|context_sensitivity_difference": -9e-05,
+    "aligned|0.5|0.3|context_specificity_difference": 0.032559989538609065,
+    "aligned|0.5|0.3|context_sensitivity_difference": -1.7750000000000093e-05,
+    "aligned|1.0|0.3|context_specificity_difference": 0.06482429948637478,
+    "aligned|1.0|0.3|context_sensitivity_difference": -0.00014875000000000017,
+    "nonspecific|0.25|0.3|context_specificity_difference": 0.0,
+    "nonspecific|0.25|0.3|context_sensitivity_difference": 0.0,
+    "nonspecific|0.5|0.3|context_specificity_difference": 0.0,
+    "nonspecific|0.5|0.3|context_sensitivity_difference": 0.0,
+    "nonspecific|1.0|0.3|context_specificity_difference": 0.0,
+    "nonspecific|1.0|0.3|context_sensitivity_difference": 0.0,
+    "partial|0.25|0.3|context_specificity_difference": 0.001111886028957711,
+    "partial|0.25|0.3|context_sensitivity_difference": -4.2750000000000036e-05,
+    "partial|0.5|0.3|context_specificity_difference": 0.00291792893519023,
+    "partial|0.5|0.3|context_sensitivity_difference": -3.6e-05,
+    "partial|1.0|0.3|context_specificity_difference": 0.008901263358251787,
+    "partial|1.0|0.3|context_sensitivity_difference": -0.00026787499999999994,
+    "unrelated|0.0|1.0|context_specificity_difference": 0.0,
+    "unrelated|0.0|1.0|context_sensitivity_difference": 0.0,
+    "unrelated|0.0|2.0|context_specificity_difference": 0.0,
+    "unrelated|0.0|2.0|context_sensitivity_difference": 0.0
+  }
+}

@@ -87,10 +87,11 @@ The study data is not distributed with LM-ContextProbe. The bundled example data
 
 ## Project Status
 
-LM-ContextProbe 0.2.0 is an early public release of an evaluation framework, and the first archived one. Its endpoints and tests are protocol v1 (see [`docs/methodology.md`](docs/methodology.md#protocol-version)). It has not yet been validated on real data or by simulation.
+LM-ContextProbe 0.2.0 is an early public release of an evaluation framework, and the first archived one. Its endpoints and tests are protocol v1 (see [`docs/methodology.md`](docs/methodology.md#protocol-version)). It has been checked by simulation ([`docs/simulation.md`](docs/simulation.md)) but not yet validated on real data.
 
 - **Tested:** both tracks run end to end on the bundled synthetic dataset, under CI.
-- **Not yet available:** results on real data, simulation studies of the endpoints' false-positive rate and power ([#18](https://github.com/soroushdty/LM-ContextProbe/issues/18)), and a second dataset format. Known gaps in the current statistics are listed in [`docs/methodology.md`](docs/methodology.md#known-limitations).
+- **Simulated:** every endpoint test keeps its false-positive rate under planted null effects, and its power, CI coverage and sensitivity to patient clustering are reported by number of patients and items ([`docs/simulation.md`](docs/simulation.md), [#18](https://github.com/soroushdty/LM-ContextProbe/issues/18)).
+- **Not yet available:** results on real data and a second dataset format. Known gaps in the current statistics are listed in [`docs/methodology.md`](docs/methodology.md#known-limitations).
 
 **Development history.** LM-ContextProbe began as the analysis code for the study described under [Origins and Acknowledgments](#origins-and-acknowledgments) and was developed in a private repository from January to June 2026 (about 800 commits). It was then generalized into a dataset-agnostic framework. This public repository was created from a sanitized snapshot, so that study data and private development material are not in its git history. A short public commit history does not reflect the age of the code.
 
@@ -249,6 +250,7 @@ Planned work is tracked in [GitHub issues](https://github.com/soroushdty/LM-Cont
 - [`docs/artifact_contracts.md`](docs/artifact_contracts.md) — Required output artifacts and schemas
 - [`docs/data_model.md`](docs/data_model.md) — Canonical vocabulary and data model
 - [`docs/methodology.md`](docs/methodology.md) — Endpoints, statistical tests, protocol version, design rationale, and known limitations
+- [`docs/simulation.md`](docs/simulation.md) — False-positive rate, power and CI coverage of every endpoint test, by simulation
 - [`docs/releasing.md`](docs/releasing.md) — Release checklist: protocol version, Zenodo archiving and DOI
 
 ## Project Structure
