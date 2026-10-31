@@ -45,6 +45,12 @@
     1.0,
     2.0
   ],
+  "attenuations": [
+    0.05,
+    0.1,
+    0.25,
+    1.0
+  ],
   "population_values": {
     "unrelated|0.0|0.3|context_specificity_difference": 0.0,
     "unrelated|0.0|0.3|context_sensitivity_difference": 0.0,
@@ -69,6 +75,14 @@
     "unrelated|0.0|1.0|context_specificity_difference": 0.0,
     "unrelated|0.0|1.0|context_sensitivity_difference": 0.0,
     "unrelated|0.0|2.0|context_specificity_difference": 0.0,
-    "unrelated|0.0|2.0|context_sensitivity_difference": 0.0
+    "unrelated|0.0|2.0|context_sensitivity_difference": 0.0,
+    "attenuated|0.05|0.3|context_specificity_difference": 0.0004616815232947571,
+    "attenuated|0.05|0.3|context_sensitivity_difference": 0.002142375,
+    "attenuated|0.1|0.3|context_specificity_difference": 0.0006298629121896997,
+    "attenuated|0.1|0.3|context_sensitivity_difference": 0.0043517500000000015,
+    "attenuated|0.25|0.3|context_specificity_difference": 0.0010773779686012975,
+    "attenuated|0.25|0.3|context_sensitivity_difference": 0.011012500000000001,
+    "attenuated|1.0|0.3|context_specificity_difference": 0.0020228988223670347,
+    "attenuated|1.0|0.3|context_sensitivity_difference": 0.044789625000000007
   }
 }

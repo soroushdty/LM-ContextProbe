@@ -711,12 +711,16 @@ class HypothesisAnalyzer:
         def _agree_rate(delta_model: np.ndarray) -> float:
             return sign_agreement_rate(delta_physician, delta_model)
 
+        def _n_moved(delta_model: np.ndarray) -> float:
+            return float(sign_agreement_cells(delta_physician, delta_model).sum())
+
         null = within_cluster_permutation_test(
             _agree_rate,
             delta_llm_correct,
             self._patient_ids,
             n_permutations=self._n_permutations,
             rng=np.random.default_rng(self._permutation_seed),
+            size_fn=_n_moved,
         )
 
         # --- Shuffled-context reference ---
