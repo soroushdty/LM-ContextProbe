@@ -289,8 +289,9 @@ def _section_h2(h2_df: pd.DataFrame, cats: list[str]) -> str:
     lines = [
         f"## {DIRECTIONAL_ALIGNMENT_T3.heading}\n",
         "**Question:** When physicians shift after context, does the LLM move in the same direction?\n",
-        "Restricted to cells where Δ_physician ≠ 0. Epsilon threshold applied to near-zero LLM deltas, "
-        "which count as disagreement, so chance agreement is not 0.5. The reference is a permutation "
+        "Restricted to cells where Δ_physician ≠ 0. LLM deltas below epsilon count as no movement; "
+        "sign agreement counts only cells where the LLM moved, and the share that did not is "
+        "reported separately. Chance agreement is not 0.5. The reference is a permutation "
         "null that shuffles each patient's model deltas among that patient's items.\n",
     ]
 
@@ -308,7 +309,7 @@ def _section_h2(h2_df: pd.DataFrame, cats: list[str]) -> str:
         lines.append(f"- **Sign agreement (shuffled):** {_fmt(r.get('sign_agreement_shuffled'))}")
         lines.append(f"- **Chance agreement (permutation null):** {_fmt(r.get('null_sign_agreement_correct'))}, "
                      f"p = {_fmt_p(r.get('permutation_p_correct'))}")
-        lines.append(f"- **Shift cells with no LLM movement (counted as disagreement):** "
+        lines.append(f"- **Shift cells with no LLM movement (left out of sign agreement):** "
                      f"correct {_fmt(r.get('unchanged_rate_correct'))}, "
                      f"shuffled {_fmt(r.get('unchanged_rate_shuffled'))}\n")
 

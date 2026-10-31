@@ -29,6 +29,7 @@ import pandas as pd
 import scipy.stats
 
 from shared.statistical.bootstrap import patient_block_bootstrap
+from shared.statistical.delta import sign_agreement_rate
 from shared.statistical.cluster_tests import (
     cluster_sign_flip_test,
     within_cluster_permutation_test,
@@ -239,10 +240,13 @@ def compute_h2(
 ) -> pd.DataFrame:
     """Compute directional alignment (formerly H2) (correct and shuffled) where Δ_physician ≠ 0.
 
-    A near-zero LLM delta counts as disagreement, so chance agreement is not
-    0.5. The aggregate row adds a permutation null: each patient's model
-    delta rows (all categories of an item together) are shuffled among that
-    patient's items, and the sign-agreement rate is recomputed.
+    The sign-agreement rates leave out cells where the LLM did not move
+    (|Δ_LLM| < epsilon; reported as ``unchanged_rate_*``): counting them as
+    disagreement made an LLM that moves where the physicians move, in random
+    directions, look aligned (#36). Chance agreement is still not 0.5. The
+    aggregate row adds a permutation null: each patient's model delta rows
+    (all categories of an item together) are shuffled among that patient's
+    items, and the sign-agreement rate is recomputed.
 
     Parameters
     ----------
@@ -268,8 +272,8 @@ def compute_h2(
         Columns: model, category, n_patients, n_shift_cells,
         mean_alignment_correct, ci_low_correct, ci_high_correct,
         mean_alignment_shuffled, ci_low_shuffled, ci_high_shuffled,
-        sign_agreement_correct, sign_agreement_shuffled,
-        unchanged_rate_correct, unchanged_rate_shuffled (share of shift
+        sign_agreement_correct, sign_agreement_shuffled (on shift cells
+        where the LLM moved), unchanged_rate_correct, unchanged_rate_shuffled (share of shift
         cells with |Δ_LLM| < epsilon), null_sign_agreement_correct and
         permutation_p_correct (aggregate row only; NaN per category),
         epsilon.
@@ -299,14 +303,11 @@ def compute_h2(
         align_c = sign_dp * dc_adj
         align_s = sign_dp * ds_adj
 
-        sign_agree_c = (np.sign(dc_adj) == sign_dp).astype(float)
-        sign_agree_s = (np.sign(ds_adj) == sign_dp).astype(float)
-
         pt_c, lo_c, hi_c = _bootstrap_scalar(align_c, pids, n_bootstrap, seed)
         pt_s, lo_s, hi_s = _bootstrap_scalar(align_s, pids, n_bootstrap, seed + 1)
 
-        sa_c = float(np.mean(sign_agree_c))
-        sa_s = float(np.mean(sign_agree_s))
+        sa_c = sign_agreement_rate(sign_dp, dc_adj)
+        sa_s = sign_agreement_rate(sign_dp, ds_adj)
 
         null_c = p_c = float("nan")
         if category == _AGGREGATE_LABEL:
@@ -383,7 +384,8 @@ def _sign_agreement_null(
     shift = (dp != 0.0) & ~np.isnan(dp)
 
     def _rate(dm_: np.ndarray) -> float:
-        valid = shift & ~np.isnan(dm_)
+        # Cells where the LLM did not move (or is missing) do not count (#36).
+        valid = shift & ~np.isnan(dm_) & (dm_ != 0.0)
         if not np.any(valid):
             return float("nan")
         return float(np.mean((np.sign(dm_) == sign_dp)[valid]))

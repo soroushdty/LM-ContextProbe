@@ -57,13 +57,48 @@ def sign_agreement_mask(
     Δ_p == 0 are set to False (not counted in sign agreement).
 
     A positive/negative sign is defined by np.sign(), so zero Δ_m does
-    not agree with any non-zero Δ_p direction.
+    not agree with any non-zero Δ_p direction.  Sign-agreement rates
+    divide by :func:`sign_agreement_cells`, which leaves zero Δ_m out.
     """
     dp = np.asarray(delta_p, dtype=np.float32)
     dm = np.asarray(delta_m, dtype=np.float32)
     nonzero_mask = dp != 0.0
     same_sign = np.sign(dp) == np.sign(dm)
     return nonzero_mask & same_sign
+
+
+def sign_agreement_cells(
+    delta_p: np.ndarray,
+    delta_m: np.ndarray,
+) -> np.ndarray:
+    """Boolean mask of the cells a sign-agreement rate is computed on.
+
+    A cell counts when both the reference and the model moved
+    (Δ_p != 0 and Δ_m != 0).  A zero Δ_m is left out rather than counted
+    as disagreement: models and reference observers both tend to move on
+    the same (ambiguous) items, so counting the model's zeros as
+    disagreement lets "moves where the reference moves" pass for "moves
+    in the same direction" (#36).  How often the model does not move is
+    reported separately, as the zero-delta rate.
+    """
+    dp = np.asarray(delta_p, dtype=np.float32)
+    dm = np.asarray(delta_m, dtype=np.float32)
+    return (dp != 0.0) & (dm != 0.0)
+
+
+def sign_agreement_rate(
+    delta_p: np.ndarray,
+    delta_m: np.ndarray,
+) -> float:
+    """Share of :func:`sign_agreement_cells` where sign(Δ_m) == sign(Δ_p).
+
+    NaN when no cell counts.
+    """
+    counted = sign_agreement_cells(delta_p, delta_m)
+    n = int(counted.sum())
+    if n == 0:
+        return float("nan")
+    return float(sign_agreement_mask(delta_p, delta_m).sum() / n)
 
 
 def confirmatory_eligible_classes(
