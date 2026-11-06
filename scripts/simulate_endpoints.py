@@ -262,8 +262,8 @@ def population_value(design: SimulationDesign, n_patients: int = 4000, seed: int
 
 
 def build_designs(patients, items, effects, base: SimulationDesign,
-                  clustering_sds=()) -> list[SimulationDesign]:
-    """The main grid, plus a clustering sub-study.
+                  clustering_sds=(), attenuations=()) -> list[SimulationDesign]:
+    """The main grid, a clustering sub-study and the ``attenuated`` scenario.
 
     The sub-study repeats the ``unrelated`` scenario at the largest
     items-per-patient with a stronger model patient effect
@@ -282,6 +282,14 @@ def build_designs(patients, items, effects, base: SimulationDesign,
         for n_p in patients:
             designs.append(replace(base, scenario="unrelated", effect=0.0, n_patients=n_p,
                                    items_per_patient=max(items), model_patient_sd=sd))
+    # Last, so that the designs above keep the seeds they had before it was added.
+    # Its effect is the attenuation fraction (1.0: no shift at all with another
+    # patient's context).
+    for n_p in patients:
+        for n_i in items:
+            for att in attenuations:
+                designs.append(replace(base, scenario="attenuated", effect=att,
+                                       n_patients=n_p, items_per_patient=n_i))
     return designs
 
 
@@ -369,8 +377,10 @@ def make_figures(rej: pd.DataFrame, cov: pd.DataFrame, fig_dir: Path, alpha: flo
 
     # 2. Power by scenario, confirmatory tests.
     confirm = [(t, e, n) for t, e, n, r in TESTS if r == "confirmatory"]
-    for scenario in ("aligned", "nonspecific", "partial"):
+    for scenario in ("aligned", "nonspecific", "partial", "attenuated"):
         sub = rej[rej["scenario"] == scenario]
+        if sub.empty:
+            continue
         effects = sorted(sub["effect"].unique())
         fig, axes = plt.subplots(len(items), len(confirm), figsize=(2.6 * len(confirm), 2.6 * len(items)),
                                  sharex=True, sharey=True, squeeze=False)
@@ -483,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--effects", type=_floats, default=[0.25, 0.5, 1.0])
     ap.add_argument("--clustering-sds", type=_floats, default=[1.0, 2.0],
                     help="Model patient-effect SDs for the clustering sub-study (unrelated scenario).")
+    ap.add_argument("--attenuations", type=_floats, default=[0.05, 0.1, 0.25, 1.0],
+                    help="Attenuation fractions for the attenuated scenario (context_sensitivity power).")
     ap.add_argument("--reps-null", type=int, default=500)
     ap.add_argument("--reps", type=int, default=200)
     ap.add_argument("--n-bootstrap", type=int, default=500)
@@ -503,12 +515,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.quick:
         args.patients, args.items, args.effects, args.clustering_sds = [6, 12], [10], [1.0], [2.0]
+        args.attenuations = [0.25]
         args.reps_null, args.reps, args.n_bootstrap, args.n_permutations = 20, 10, 100, 200
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     base = SimulationDesign()
-    designs = build_designs(args.patients, args.items, args.effects, base, args.clustering_sds)
+    designs = build_designs(args.patients, args.items, args.effects, base, args.clustering_sds,
+                            args.attenuations)
     seeds = np.random.SeedSequence(args.seed)
     jobs = []
     for design in designs:
@@ -546,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_permutations": args.n_permutations, "reps_null": args.reps_null, "reps": args.reps,
         "patients": args.patients, "items_per_patient": args.items, "effects": args.effects,
         "base_design": base.to_dict(),
-        "clustering_sds": args.clustering_sds,
+        "clustering_sds": args.clustering_sds, "attenuations": args.attenuations,
         "population_values": {f"{s}|{e}|{m}|{q}": v for (s, e, m, q), v in truths.items()},
     }, indent=2))
     for path in make_figures(rej, cov, out / "figures", args.alpha):

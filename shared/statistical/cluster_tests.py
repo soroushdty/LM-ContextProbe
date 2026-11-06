@@ -92,6 +92,7 @@ def within_cluster_permutation_test(
     cluster_ids: np.ndarray,
     n_permutations: int = 10_000,
     rng: np.random.Generator | None = None,
+    size_fn: Callable[[np.ndarray], float] | None = None,
 ) -> dict[str, float]:
     """One-sided test that permutes ``rows`` within each cluster.
 
@@ -99,6 +100,15 @@ def within_cluster_permutation_test(
     recomputes ``statistic_fn``.  A row moves as a whole, so dependence
     between the columns of one row (for example the classes of one item) is
     kept.  Clusters with a single row contribute nothing to the null.
+
+    ``size_fn`` studentizes a statistic that is a mean over a number of
+    cells that itself depends on the permutation.  A sign-agreement rate
+    counts only cells where the model moved, and models move most on the
+    items where the reference moves, so permuted rows land on fewer counted
+    cells and the raw null is too wide: the test rejected in about 2% of
+    null replicates at alpha = 0.05 (#39).  With ``size_fn``, the observed
+    and every null replicate are compared as
+    ``(statistic - null_mean) * sqrt(size_fn(rows))``.
 
     Args:
         statistic_fn: Maps a permuted copy of ``rows`` (same shape) to a
@@ -109,11 +119,14 @@ def within_cluster_permutation_test(
         cluster_ids: (n,) cluster (patient) ID for each row.
         n_permutations: Monte Carlo replicates.
         rng: Generator for the permutations.
+        size_fn: Optional; maps rows (observed or permuted) to the number of
+            cells the statistic averages over.
 
     Returns:
         Dict with ``observed``, ``null_mean`` (the statistic's value expected
-        by chance) and ``p_value`` = (1 + #{null >= observed}) /
-        (n_permutations + 1).  All NaN if the observed statistic is NaN.
+        by chance), ``null_std`` and ``p_value`` = (1 + #{null >= observed}) /
+        (n_permutations + 1), on the studentized scale when ``size_fn`` is
+        given.  All NaN if the observed statistic is NaN.
     """
     rows = np.asarray(rows)
     cluster_ids = np.asarray(cluster_ids)
@@ -126,7 +139,7 @@ def within_cluster_permutation_test(
     nan = float("nan")
     observed = float(statistic_fn(rows))
     if np.isnan(observed):
-        return {"observed": nan, "null_mean": nan, "p_value": nan}
+        return {"observed": nan, "null_mean": nan, "null_std": nan, "p_value": nan}
 
     if rng is None:
         rng = np.random.default_rng()
@@ -136,15 +149,27 @@ def within_cluster_permutation_test(
     order = np.arange(rows.shape[0])
 
     null = np.empty(n_permutations, dtype=np.float64)
+    sizes = np.empty(n_permutations, dtype=np.float64)
     for i in range(n_permutations):
         perm = order.copy()
         for g in groups:
             perm[g] = rng.permutation(g)
         null[i] = statistic_fn(rows[perm])
+        if size_fn is not None:
+            sizes[i] = size_fn(rows[perm])
 
-    tol = 1e-12 * max(1.0, abs(observed))
+    null_mean = float(np.nanmean(null))
+    finite = null[np.isfinite(null)]  # an odds ratio can be infinite
+    null_std = float(np.std(finite)) if finite.size else nan
+    test_null, test_observed = null, observed
+    if size_fn is not None:
+        test_null = (null - null_mean) * np.sqrt(sizes)
+        test_observed = (observed - null_mean) * np.sqrt(float(size_fn(rows)))
+
+    tol = 1e-12 * max(1.0, abs(test_observed))
     return {
         "observed": observed,
-        "null_mean": float(np.nanmean(null)),
-        "p_value": float((1 + np.sum(null >= observed - tol)) / (n_permutations + 1)),
+        "null_mean": null_mean,
+        "null_std": null_std,
+        "p_value": float((1 + np.sum(test_null >= test_observed - tol)) / (n_permutations + 1)),
     }

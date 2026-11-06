@@ -165,8 +165,11 @@ def h1_binomial_per_class(
         def _rate(dm_col: np.ndarray, _dp=dp[:, c_idx]) -> float:
             return sign_agreement_rate(_dp, dm_col)
 
+        def _n_moved(dm_col: np.ndarray, _dp=dp[:, c_idx]) -> float:
+            return float(sign_agreement_cells(_dp, dm_col).sum())
+
         null = within_cluster_permutation_test(
-            _rate, dm[:, c_idx], pid, n_permutations, null_rng,
+            _rate, dm[:, c_idx], pid, n_permutations, null_rng, size_fn=_n_moved,
         )
         p_val = null["p_value"]
 
@@ -264,36 +267,26 @@ def h1_permutation_test(
         }
 
     # Bootstrap CI on observed rate
-    unique_pts = np.unique(pid)
-    pt_to_ix = {pt: np.where(pid == pt)[0] for pt in unique_pts}
-
     def _boot_rate(idx: np.ndarray) -> float:
         return _aggregate_rate(dp[idx], dm[idx])
 
     from shared.statistical.bootstrap import patient_block_bootstrap
     ci_lo, ci_hi = patient_block_bootstrap(_boot_rate, pid, n_resamples, rng)
 
-    # Null distribution: permute dm within each patient block
-    null_vals = np.empty(n_permutations, dtype=np.float64)
-    for i in range(n_permutations):
-        dm_perm = dm.copy()
-        for pt in unique_pts:
-            ix = pt_to_ix[pt]
-            # Permute the row ordering within this patient's items
-            dm_perm[ix] = dm_perm[rng.permutation(ix)]
-        null_vals[i] = _aggregate_rate(dp, dm_perm)
-
-    null_mean = float(np.nanmean(null_vals))
-    null_std = float(np.nanstd(null_vals))
-    p_value = float(np.mean(null_vals >= observed))
+    # Null distribution: permute dm rows within each patient block,
+    # studentized by the number of moved cells (#39)
+    null = within_cluster_permutation_test(
+        lambda dm_: _aggregate_rate(dp, dm_), dm, pid, n_permutations, rng,
+        size_fn=lambda dm_: float(sign_agreement_cells(dp, dm_).sum()),
+    )
 
     return {
         "aggregate_rate": observed,
         "ci_lower": ci_lo,
         "ci_upper": ci_hi,
-        "null_mean": null_mean,
-        "null_std": null_std,
-        "p_value": p_value,
+        "null_mean": null["null_mean"],
+        "null_std": null["null_std"],
+        "p_value": null["p_value"],
         "n_permutations": n_permutations,
     }
 

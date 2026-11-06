@@ -11,7 +11,7 @@ The output is the arrays the endpoint code takes (scores and reference labels), 
 - `generator.py`
   - `SimulationDesign`: the parameters of one simulated study (scenario, effect size, numbers of patients, items, categories and observers, and the variance components below).
   - `simulate_study(design, rng)`: draws one `SimulatedStudy`: patient IDs, reference labels with and without context, and the candidate's context-free, correct-context and shuffled-context scores.
-  - `SCENARIOS`: `unrelated`, `aligned`, `nonspecific`, `partial`.
+  - `SCENARIOS`: `unrelated`, `aligned`, `nonspecific`, `partial`, `attenuated`.
 
 ## Model
 
@@ -26,5 +26,6 @@ Everything is on the logit scale. A row is one (patient, item) pair.
 | `aligned` | `effect ·` the shift context `k` implies for this item | Directional alignment, context specificity and class correspondence reject |
 | `nonspecific` | `effect · (mu + h)`, whatever the context | Directional alignment and class correspondence reject; context specificity must not |
 | `partial` | As `aligned`, sign reversed in the second half of the categories | Pooled directional alignment and class correspondence lose power |
+| `attenuated` | As `unrelated` with the patient's own context; with another patient's context, the whole shift times `1 − effect` | Only `context_sensitivity` rejects |
 
-None of the scenarios makes the correct context move the scores *further* than another patient's context, so `context_sensitivity` is only checked under its null.
+Only `attenuated` makes the correct context move the scores *further* than another patient's context, so it is the scenario that measures `context_sensitivity`'s power (#40).
